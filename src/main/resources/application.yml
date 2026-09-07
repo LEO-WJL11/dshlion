@@ -1,0 +1,76 @@
+# =============================================================
+# Lion-Code Agent Harness 配置文件
+# =============================================================
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  main:
+    headless: false
+  application:
+    name: lion-code-agent-harness
+  web:
+    resources:
+      static-locations: classpath:/static/
+
+# =============================================================
+# Lion-Code 核心配置
+# =============================================================
+lion:
+  # 工作区配置
+  workspace:
+    # 默认工作区路径（用户可覆盖）
+    default-path: ${user.home}/lion-code-workspace
+    # 强制绑定工作区：未选择工作区不能创建会话
+    force-bind: true
+
+  # Agent主循环配置
+  agent:
+    # 工具调用超时（秒）
+    tool-timeout-seconds: 120
+    # 模型调用超时（秒）
+    model-timeout-seconds: 300
+
+  # 事件溯源配置
+  event:
+    # 事件存储目录
+    store-path: ${lion.workspace.default-path}/.lioncode/events
+    # 事件保留天数
+    retention-days: 30
+
+  # 插件系统配置
+  plugin:
+    # 插件扫描路径
+    scan-path: ${lion.workspace.default-path}/.lioncode/plugins
+    # 是否启用热加载
+    hot-reload: true
+
+  # 消息队列配置
+  queue:
+    # 队列容量
+    capacity: 1000
+    # 默认FIFO模式
+    default-mode: FIFO
+
+  # 模型适配器配置（用户通过UI配置，此处为默认模板）
+  model:
+    adapters:
+      # OpenAI兼容适配器（默认）
+      openai-compatible:
+        enabled: true
+        base-url: ""
+        api-key: ""
+      # Anthropic Claude原生适配器
+      anthropic:
+        enabled: true
+        base-url: "https://api.anthropic.com"
+        api-key: ""
+
+logging:
+  level:
+    com.lioncode: DEBUG
+    root: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

@@ -1,0 +1,76 @@
+# Lion-Code Agent Harness .gitignore
+
+# ===== Maven =====
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== IDE =====
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+*.swp
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Java =====
+*.class
+*.jar
+*.jar.bak*
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+# 发布用fat jar（根目录，随仓库分发）
+!lion-code-agent-harness-1.0.0-SNAPSHOT.jar
+
+# ===== Python =====
+__pycache__/
+*.pyc
+
+# ===== 打包产物 =====
+output/
+*.exe
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== 运行时数据 =====
+.lioncode/
+workspace-data/
+
+# ===== 参考源码目录（保留但不追踪其内部变更） =====
+# claude-code/ 和 deepseek-harness/ 是参考源码，加入.gitignore
+claude-code/
+deepseek-harness/
+
+# ===== Node.js (前端) =====
+node_modules/
+web/node_modules/
+web/dist/
+web/.cache/
+
+# ===== 环境变量 =====
+.env
+.env.local
+.env.*.local
