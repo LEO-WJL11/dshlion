@@ -751,7 +751,6 @@ var App = {
         var html = '<div style="display:flex;gap:8px;margin-bottom:16px">'
             + '<button class="btn btn-sm" id="setTabProviders" onclick="App.settingsTab(\'providers\')">API提供商</button>'
             + '<button class="btn btn-sm" id="setTabApprovals" onclick="App.settingsTab(\'approvals\')">审批策略</button>'
-            + '<button class="btn btn-sm" id="setTabMcp" onclick="App.settingsTab(\'mcp\')">MCP服务器</button>'
             + '</div><div id="settingsContent"></div>';
         this.openModal('设置', html);
         this.settingsTab('providers');
@@ -760,7 +759,7 @@ var App = {
     // 设置页签切换
     settingsTab: function(tab) {
         var self = this;
-        var titles = {'providers':'setTabProviders', 'approvals':'setTabApprovals', 'mcp':'setTabMcp'};
+        var titles = {'providers':'setTabProviders', 'approvals':'setTabApprovals'};
         Object.keys(titles).forEach(function(t) {
             var b = document.getElementById(titles[t]);
             if (!b) return;
@@ -769,7 +768,6 @@ var App = {
         });
         if (tab === 'providers') self.renderProvidersTab();
         else if (tab === 'approvals') self.renderApprovalsTab();
-        else if (tab === 'mcp') self.renderMcpTab();
     },
 
     // ====== 提供商页签 ======
@@ -844,85 +842,6 @@ var App = {
         }).then(function(r) { return r.json(); }).then(function(result) {
             if (!result.success) alert(result.error || '保存失败');
         }).catch(function() { alert('保存失败'); });
-    },
-
-    // ====== MCP服务器页签 ======
-    renderMcpTab: function() {
-        var box = document.getElementById('settingsContent');
-        box.innerHTML = '<p style="color:#a0a0b8">正在加载MCP服务器…</p>';
-        fetch('/api/mcp').then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) { box.innerHTML = '<p style="color:#e17055">加载失败: ' + (result.error || '') + '</p>'; return; }
-            var servers = result.data || [];
-            var inpStyle = 'padding:6px 10px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-size:13px';
-            var html = '<p style="color:#a0a0b8;margin-bottom:12px">连接MCP服务器后，其提供的外部工具会自动注册为插件，Agent可直接调用。</p>';
-            html += '<div style="background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;padding:12px;margin-bottom:16px">';
-            html += '<div style="display:flex;gap:8px;margin-bottom:8px"><input id="mcpName" placeholder="服务器名称" style="flex:1;' + inpStyle + '"><select id="mcpTransport" style="' + inpStyle + '"><option value="stdio">stdio（本地进程）</option><option value="http">http（远程）</option></select></div>';
-            html += '<div id="mcpStdioRow" style="display:flex;gap:8px;margin-bottom:8px"><input id="mcpCommand" placeholder="命令，如 npx" style="flex:1;' + inpStyle + '"><input id="mcpArgs" placeholder="参数（逗号分隔），如 -y,@modelcontextprotocol/server-filesystem" style="flex:1;' + inpStyle + '"></div>';
-            html += '<div id="mcpHttpRow" style="display:none;margin-bottom:8px"><input id="mcpUrl" placeholder="http://127.0.0.1:8000/mcp" style="width:100%;' + inpStyle + '"></div>';
-            html += '<button class="btn btn-primary btn-sm" onclick="App.addMcpServer()">添加服务器</button></div>';
-            html += '<div id="mcpList">';
-            if (servers.length === 0) {
-                html += '<div style="text-align:center;color:#6a6a80;padding:16px">暂无MCP服务器</div>';
-            }
-            servers.forEach(function(s) {
-                html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px">'
-                    + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">' + s.name + '</div>'
-                    + '<div style="font-size:11px;color:#6a6a80">' + (s.transport || '') + ' · ' + (s.status || '') + ' · 工具: ' + (s.toolCount || 0) + (s.error ? ' · ' + s.error : '') + '</div></div>'
-                    + (s.status === 'CONNECTED'
-                        ? '<button class="btn btn-ghost btn-sm" onclick="App.mcpDisconnect(\'' + s.name + '\')">断开</button>'
-                        : '<button class="btn btn-primary btn-sm" onclick="App.mcpConnect(\'' + s.name + '\')">连接</button>')
-                    + '<button class="btn btn-ghost btn-sm" onclick="App.mcpRemove(\'' + s.name + '\')" style="color:#e17055">删除</button></div>';
-            });
-            html += '</div>';
-            box.innerHTML = html;
-            document.getElementById('mcpTransport').onchange = function() {
-                document.getElementById('mcpStdioRow').style.display = this.value === 'stdio' ? 'flex' : 'none';
-                document.getElementById('mcpHttpRow').style.display = this.value === 'http' ? 'block' : 'none';
-            };
-        }).catch(function() { box.innerHTML = '<p style="color:#e17055">加载失败</p>'; });
-    },
-
-    addMcpServer: function() {
-        var name = document.getElementById('mcpName').value.trim();
-        var transport = document.getElementById('mcpTransport').value;
-        if (!name) { alert('请输入服务器名称'); return; }
-        var body = {name: name, transport: transport};
-        if (transport === 'stdio') {
-            body.command = document.getElementById('mcpCommand').value.trim();
-            var argsStr = document.getElementById('mcpArgs').value.trim();
-            body.args = argsStr ? argsStr.split(',').map(function(s) { return s.trim(); }) : [];
-        } else {
-            body.url = document.getElementById('mcpUrl').value.trim();
-        }
-        fetch('/api/mcp/servers', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(body)
-        }).then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) { alert(result.error || '添加失败'); return; }
-            App.renderMcpTab();
-        }).catch(function() { alert('添加失败'); });
-    },
-
-    mcpConnect: function(name) {
-        var box = document.getElementById('settingsContent');
-        fetch('/api/mcp/servers/' + encodeURIComponent(name) + '/connect', {method: 'POST'})
-          .then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) { alert(result.error || '连接失败'); }
-            App.renderMcpTab();
-          }).catch(function() { alert('连接失败'); });
-    },
-
-    mcpDisconnect: function(name) {
-        fetch('/api/mcp/servers/' + encodeURIComponent(name) + '/disconnect', {method: 'POST'})
-          .then(function(r) { return r.json(); }).then(function() { App.renderMcpTab(); })
-          .catch(function() {});
-    },
-
-    mcpRemove: function(name) {
-        fetch('/api/mcp/servers/' + encodeURIComponent(name), {method: 'DELETE'})
-          .then(function(r) { return r.json(); }).then(function() { App.renderMcpTab(); })
-          .catch(function() {});
     },
 
     onProviderChange: function() {
