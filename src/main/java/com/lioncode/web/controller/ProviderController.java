@@ -1,7 +1,9 @@
 package com.lioncode.web.controller;
 
+import com.lioncode.model.config.AppConfigStore;
 import com.lioncode.model.config.ModelProviderConfig;
 import com.lioncode.web.dto.ApiResponse;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * - UI下拉框切换普通端点 / Token-Plan端点
  * - 用户填入API-Key后自动调用/v1/models拉取模型列表
  * - 识别Token-Plan返回的TPM、RPM限流信息
+ * - 配置持久化到磁盘，应用重启后自动恢复
  */
 @RestController
 @RequestMapping("/api/providers")
@@ -26,8 +29,45 @@ public class ProviderController {
 
     private static final Logger log = LoggerFactory.getLogger(ProviderController.class);
 
+    private static final String CONFIG_KEY = "providers";
+
     /** 用户配置的提供商实例 */
     private final Map<String, ProviderInstance> userProviders = new ConcurrentHashMap<>();
+
+    private final AppConfigStore configStore;
+
+    public ProviderController(AppConfigStore configStore) {
+        this.configStore = configStore;
+    }
+
+    /**
+     * 启动时从磁盘恢复已配置的提供商
+     */
+    @PostConstruct
+    public void restoreProviders() {
+        Map<String, Object> saved = configStore.getMap(CONFIG_KEY);
+        if (saved.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : saved.entrySet()) {
+            try {
+                ProviderInstance instance = MODEL_MAPPER.convertValue(entry.getValue(), ProviderInstance.class);
+                if (instance != null && instance.providerId() != null) {
+                    userProviders.put(instance.providerId(), instance);
+                }
+            } catch (Exception e) {
+                log.warn("跳过损坏的提供商配置: {}", entry.getKey(), e);
+            }
+        }
+        log.info("已从磁盘恢复 {} 个提供商配置", userProviders.size());
+    }
+
+    /**
+     * 持久化提供商配置
+     */
+    private void persistProviders() {
+        configStore.set(CONFIG_KEY, new LinkedHashMap<>(userProviders));
+    }
 
     /**
      * 获取所有内置提供商模板
@@ -92,6 +132,7 @@ public class ProviderController {
             );
 
             userProviders.put(request.providerId(), instance);
+            persistProviders();
             log.info("提供商已配置: {} ({})", instance.displayName(), 
                 isTokenPlan ? "Token-Plan" : "普通按量");
 
@@ -146,6 +187,7 @@ public class ProviderController {
             instance.useTokenPlan(), instance.protocolType(), instance.supportsTokenPlan(),
             models, instance.tpmLimit(), instance.rpmLimit());
         userProviders.put(providerId, updated);
+        persistProviders();
 
         ModelFetchResult result = new ModelFetchResult(
             instance.providerId(), instance.baseUrl(), models,
@@ -272,6 +314,7 @@ public class ProviderController {
         );
 
         userProviders.put(providerId, updated);
+        persistProviders();
         log.info("端点已切换: {} -> {}", providerId, useTokenPlan ? "Token-Plan" : "普通按量");
 
         return ApiResponse.ok("端点已切换", updated);
@@ -283,6 +326,7 @@ public class ProviderController {
     @DeleteMapping("/{providerId}")
     public ApiResponse<Void> removeProvider(@PathVariable("providerId") String providerId) {
         userProviders.remove(providerId);
+        persistProviders();
         return ApiResponse.ok("提供商已删除", null);
     }
 

@@ -51,19 +51,29 @@ public class ConversationHistory {
         try {
             Files.createDirectories(historyDir);
             log.info("对话历史存储目录已初始化: {}", historyDir);
+            // 启动时自动恢复所有已保存的对话历史
+            int restored = 0;
+            for (String savedId : getSavedSessionIds()) {
+                if (loadFromDisk(savedId)) {
+                    restored++;
+                }
+            }
+            log.info("对话历史已从磁盘恢复: {} 个会话", restored);
         } catch (IOException e) {
             log.error("无法创建对话历史目录", e);
         }
     }
 
     /**
-     * 添加消息到会话（线程安全）
+     * 添加消息到会话（线程安全），并立即持久化到磁盘
      */
     public void addMessage(ConversationMessage message) {
         conversations.computeIfAbsent(message.sessionId(), 
             k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(message);
         log.debug("消息已添加到会话 {}: [{}] {}", message.sessionId(), 
             message.role(), truncate(message.content(), 50));
+        // 自动持久化，保证重启/刷新后对话不丢失
+        saveToDisk(message.sessionId());
     }
 
     /**
@@ -125,12 +135,27 @@ public class ConversationHistory {
             String json = Files.readString(filePath);
             List<ConversationMessage> messages = mapper.readValue(json, 
                 new TypeReference<List<ConversationMessage>>() {});
-            conversations.put(sessionId, messages);
+            conversations.put(sessionId, new java.util.concurrent.CopyOnWriteArrayList<>(messages));
             log.info("会话历史已从磁盘加载: {} ({}条消息)", sessionId, messages.size());
             return true;
         } catch (IOException e) {
             log.error("加载会话历史失败: {}", sessionId, e);
             return false;
+        }
+    }
+
+    /**
+     * 删除会话的磁盘历史文件
+     */
+    public void deleteFromDisk(String sessionId) {
+        try {
+            Path filePath = historyDir.resolve(sessionId + ".json");
+            boolean deleted = Files.deleteIfExists(filePath);
+            if (deleted) {
+                log.info("会话历史文件已删除: {}", sessionId);
+            }
+        } catch (IOException e) {
+            log.error("删除会话历史文件失败: {}", sessionId, e);
         }
     }
 

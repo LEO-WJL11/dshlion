@@ -186,9 +186,11 @@
 
         <!-- 资源目录配置 -->
         <resources>
+            <!-- 关闭资源过滤：${...}占位符保留到运行时由Spring解析，
+                 避免构建机器用户目录等本机信息被打包进产物 -->
             <resource>
                 <directory>src/main/resources</directory>
-                <filtering>true</filtering>
+                <filtering>false</filtering>
             </resource>
             <!-- 打包前端静态资源 -->
             <resource>

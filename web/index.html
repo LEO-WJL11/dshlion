@@ -122,10 +122,10 @@
         <div class="sidebar-section">
             <div class="section-title">工作模式</div>
             <div class="mode-selector">
-                <button class="mode-btn active" onclick="App.setMode(this,'STANDARD')">标准</button>
-                <button class="mode-btn" onclick="App.setMode(this,'PTC')">PTC</button>
-                <button class="mode-btn" onclick="App.setMode(this,'CREATIVE')">创造</button>
-                <button class="mode-btn" onclick="App.setMode(this,'MINIMAL')">极简</button>
+                <button class="mode-btn active" data-mode="STANDARD" onclick="App.setMode(this,'STANDARD')">标准</button>
+                <button class="mode-btn" data-mode="PTC" onclick="App.setMode(this,'PTC')">PTC</button>
+                <button class="mode-btn" data-mode="CREATIVE" onclick="App.setMode(this,'CREATIVE')">创造</button>
+                <button class="mode-btn" data-mode="MINIMAL" onclick="App.setMode(this,'MINIMAL')">极简</button>
             </div>
         </div>
         <div class="sidebar-footer">
@@ -202,6 +202,11 @@ var App = {
     toolLines: [],
     lastEventTs: 0,
     pollTimer: null,
+    appConfig: null,
+    savedModel: '',
+    savedThinkingLevel: '',
+    useTokenPlan: false,
+    pickingWs: false,
 
     init: function() {
         var self = this;
@@ -220,63 +225,173 @@ var App = {
 
     autoInit: function() {
         var self = this;
-        // 自动注册默认工作区（后端动态返回用户主目录下的Desktop，无硬编码路径）
-        fetch('/api/workspaces/default')
-          .then(function(r) { return r.json(); })
-          .then(function(result) {
-            if (result.success && result.data) {
-                self.ws = result.data.path;
-                document.getElementById('wsPath').textContent = result.data.path;
-                document.getElementById('bcWs').textContent = result.data.path;
+        this.loadPlugins();
+        // 先恢复应用配置（模型、apiKey、baseUrl等），再恢复会话与历史
+        this.restoreConfig(function() {
+            self.loadSessions(function(sessions) {
+                if (sessions && sessions.length > 0) {
+                    // 有历史会话：恢复最近一个会话及其对话历史
+                    var latest = sessions[sessions.length - 1];
+                    self.sessionId = latest.sessionId;
+                    self.ws = latest.workspaceId;
+                    if (latest.mode) self.setModeUi(latest.mode);
+                    document.getElementById('wsPath').textContent = latest.workspaceId;
+                    document.getElementById('bcWs').textContent = latest.workspaceId;
+                    document.getElementById('bcSession').textContent = '会话 ' + latest.sessionId.substring(0,8);
+                    self.loadHistory(latest.sessionId);
+                } else {
+                    // 无历史会话：注册默认工作区并创建会话
+                    self.createDefaultSession();
+                }
+            });
+        });
+    },
+
+    // 从后端恢复持久化的应用配置（模型、适配器、提供商）
+    restoreConfig: function(callback) {
+        var self = this;
+        fetch('/api/chat/config').then(function(r) { return r.json(); }).then(function(result) {
+            if (!result.success) { if (callback) callback(); return; }
+            self.appConfig = result.data || {};
+            var key = self.appConfig.activeAdapter === 'ANTHROPIC' ? 'anthropic' : 'openai';
+            var ac = self.appConfig[key] || {};
+            self.savedModel = ac.model || '';
+            self.savedThinkingLevel = ac.thinkingLevel || '';
+            self.fillModelsFromConfig(function() {
+                if (callback) callback();
+            });
+        }).catch(function() { if (callback) callback(); });
+    },
+
+    // 从保存的配置填充模型下拉框
+    fillModelsFromConfig: function(callback) {
+        var self = this;
+        var sel = document.getElementById('modelSelect');
+        var cfg = this.appConfig || {};
+        var key = cfg.activeAdapter === 'ANTHROPIC' ? 'anthropic' : 'openai';
+        var ac = cfg[key] || {};
+        var models = [];
+        var providers = cfg.providers || {};
+        for (var pid in providers) {
+            var p = providers[pid];
+            if (p && p.availableModels && p.availableModels.length > 0 && p.baseUrl === ac.baseUrl) {
+                models = p.availableModels;
+                break;
             }
-          })
-          .then(function() {
-            // 自动创建会话
-            return fetch('/api/sessions', {
+        }
+        if (models.length === 0 && ac.model) {
+            models = [{modelId: ac.model, modelName: ac.model}];
+        }
+        sel.innerHTML = '<option value="">选择模型...</option>';
+        if (models.length === 0) { if (callback) callback(); return; }
+        models.forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.modelId || m.id;
+            opt.textContent = m.modelName || m.name || m.modelId || m.id;
+            sel.appendChild(opt);
+        });
+        if (ac.model) {
+            sel.value = ac.model;
+            if (!sel.value) sel.selectedIndex = 1;
+        } else {
+            sel.selectedIndex = 1;
+        }
+        this.onModelChange();
+        if (callback) callback();
+    },
+
+    createDefaultSession: function() {
+        var self = this;
+        // 无历史会话时：从后端获取系统常用目录（动态，不含本机信息），
+        // 注册默认工作区并创建会话
+        fetch('/api/native-dialog/common-dirs').then(function(r) { return r.json(); })
+          .then(function(dirs) {
+            var defaultPath = (dirs.success && dirs.data && dirs.data['用户目录']) ? dirs.data['用户目录'] : '';
+            if (!defaultPath) { throw new Error('无法获取用户目录'); }
+            return fetch('/api/workspaces', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({workspaceId: self.ws || '', mode: self.mode})
-            }).then(function(r) { return r.json(); });
-          })
-          .then(function(result) {
-            if (result.success && result.data) {
-                self.sessionId = result.data.sessionId;
-                document.getElementById('bcSession').textContent = '会话 ' + result.data.sessionId.substring(0,8);
-            }
+                body: JSON.stringify({path: defaultPath})
+            }).then(function(r) { return r.json(); })
+              .then(function(result) {
+                if (result.success) {
+                    self.ws = result.data.id || result.data.path;
+                    document.getElementById('wsPath').textContent = result.data.path;
+                    document.getElementById('bcWs').textContent = result.data.path;
+                }
+                // 自动创建会话
+                return fetch('/api/sessions', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({workspaceId: self.ws || defaultPath, mode: self.mode})
+                }).then(function(r) { return r.json(); });
+              })
+              .then(function(result) {
+                if (result.success && result.data) {
+                    self.sessionId = result.data.sessionId;
+                    document.getElementById('bcSession').textContent = '会话 ' + result.data.sessionId.substring(0,8);
+                }
+              });
           })
           .catch(function(e) { console.log('自动初始化:', e); });
-
-        this.loadPlugins();
-        this.loadSessions();
     },
 
     // ====== 工作区 ======
     pickWorkspace: function() {
         var self = this;
-        // 常用路径由后端动态计算返回，无硬编码用户路径
-        fetch('/api/workspaces/common')
+        if (this.pickingWs) return; // 防止重复点击弹出多个窗口
+        this.pickingWs = true;
+        // 按钮置为"请稍候"，防止连点
+        var btn = document.querySelector('.workspace-info .btn');
+        var btnOriginal = btn ? btn.textContent : '选择';
+        if (btn) { btn.textContent = '请稍候…'; btn.disabled = true; }
+        var done = function() {
+            self.pickingWs = false;
+            if (btn) { btn.textContent = btnOriginal; btn.disabled = false; }
+        };
+        // 弹Windows原生标准文件夹选择窗口（现代Explorer样式）
+        var initial = this.ws || '';
+        fetch('/api/native-dialog/select-directory?initialPath=' + encodeURIComponent(initial))
           .then(function(r) { return r.json(); })
           .then(function(result) {
-            var paths = (result.success && result.data) ? result.data : [];
+            done();
+            if (result.success && result.data) {
+                self.selectWs(result.data);
+            } else {
+                // 取消或失败 → 页内常用路径模态框兜底（不再弹系统窗口）
+                self.openWorkspaceFallbackModal();
+            }
+          })
+          .catch(function() {
+            done();
+            self.openWorkspaceFallbackModal();
+          });
+    },
+
+    // 常用路径兜底模态框（原生对话框不可用时）
+    openWorkspaceFallbackModal: function() {
+        var self = this;
+        var render = function(commonPaths) {
+            var icons = {'桌面':'🖥️', '文档':'📄', '下载':'📥', '图片':'🖼️', '用户目录':'🏠'};
             var html = '<p style="color:#a0a0b8;margin-bottom:16px">选择常用目录或手动输入路径：</p>';
             html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
-            paths.forEach(function(p) {
-                html += '<button onclick="App.selectWs(\'' + p.path.replace(/\\/g, '\\\\') + '\')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;color:#e8e8f0;cursor:pointer;font-size:13px;text-align:left">';
-                html += '<span style="font-size:18px">' + p.icon + '</span><span style="flex:1">' + p.name + '</span>';
-                html += '<span style="font-size:11px;color:#6a6a80;font-family:monospace">' + p.path + '</span></button>';
+            Object.keys(commonPaths).forEach(function(name) {
+                var p = commonPaths[name];
+                if (!p) return;
+                var esc = p.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                html += '<button onclick="App.selectWs(\'' + esc + '\')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;color:#e8e8f0;cursor:pointer;font-size:13px;text-align:left">';
+                html += '<span style="font-size:18px">' + (icons[name] || '📁') + '</span><span style="flex:1">' + name + '</span>';
+                html += '<span style="font-size:11px;color:#6a6a80;font-family:monospace">' + p + '</span></button>';
             });
             html += '</div>';
             html += '<div style="display:flex;gap:8px"><input id="customWsPath" style="flex:1;padding:8px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-family:monospace;font-size:13px" placeholder="输入自定义路径，如 D:\\my-project">';
             html += '<button class="btn btn-primary" onclick="App.selectWs(document.getElementById(\'customWsPath\').value)">确定</button></div>';
             self.openModal('选择工作区', html);
-          })
-          .catch(function(e) {
-            // 常用路径加载失败时仅提供手动输入
-            var html = '<p style="color:#a0a0b8;margin-bottom:16px">手动输入工作区路径：</p>';
-            html += '<div style="display:flex;gap:8px"><input id="customWsPath" style="flex:1;padding:8px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-family:monospace;font-size:13px" placeholder="输入路径，如 D:\\my-project">';
-            html += '<button class="btn btn-primary" onclick="App.selectWs(document.getElementById(\'customWsPath\').value)">确定</button></div>';
-            self.openModal('选择工作区', html);
-          });
+        };
+        // 常用目录从后端动态获取（基于当前系统用户，不含本机硬编码信息）
+        fetch('/api/native-dialog/common-dirs').then(function(r) { return r.json(); })
+          .then(function(result) { render((result.success && result.data) ? result.data : {}); })
+          .catch(function() { render({}); });
     },
 
     selectWs: function(path) {
@@ -289,9 +404,10 @@ var App = {
         }).then(function(r) { return r.json(); })
           .then(function(result) {
             if (!result.success) { alert(result.error || '注册失败'); return; }
-            self.ws = path.trim();
-            document.getElementById('wsPath').textContent = path.trim();
-            document.getElementById('bcWs').textContent = path.trim();
+            // 会话绑定工作区ID（绝对路径），界面显示原始路径
+            self.ws = result.data.id || path.trim();
+            document.getElementById('wsPath').textContent = result.data.path || path.trim();
+            document.getElementById('bcWs').textContent = result.data.path || path.trim();
             self.closeModal();
             // 立即创建绑定新工作区的会话，让工作区设置生效
             return fetch('/api/sessions', {
@@ -331,12 +447,13 @@ var App = {
         });
     },
 
-    loadSessions: function() {
+    loadSessions: function(callback) {
         var self = this;
         fetch('/api/sessions').then(function(r) { return r.json(); }).then(function(result) {
             var list = document.getElementById('sessionList');
             if (!result.success || !result.data || result.data.length === 0) {
                 list.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:20px">暂无会话</div>';
+                if (callback) callback([]);
                 return;
             }
             list.innerHTML = result.data.map(function(s) {
@@ -345,14 +462,55 @@ var App = {
                     '<span>' + s.sessionId.substring(0,8) + '...</span>' +
                     '<button class="del-btn" onclick="event.stopPropagation();App.deleteSession(\'' + s.sessionId + '\')">×</button></div>';
             }).join('');
+            self.sessionsData = result.data;
+            if (callback) callback(result.data);
         });
     },
 
     switchSession: function(sid) {
         this.sessionId = sid;
         document.getElementById('bcSession').textContent = '会话 ' + sid.substring(0,8);
+        // 同步该会话的工作模式到界面
+        var s = (this.sessionsData || []).filter(function(x) { return x.sessionId === sid; })[0];
+        if (s && s.mode) {
+            this.mode = s.mode;
+            this.setModeUi(s.mode);
+        }
         this.loadSessions();
-        this.clearMessages();
+        // 加载该会话的历史消息
+        this.loadHistory(sid);
+    },
+
+    // 从后端加载会话历史消息并渲染
+    loadHistory: function(sid) {
+        var self = this;
+        var area = document.getElementById('msgArea');
+        area.innerHTML = '';
+        fetch('/api/sessions/' + encodeURIComponent(sid) + '/history')
+          .then(function(r) { return r.json(); })
+          .then(function(result) {
+            if (!result.success || !result.data || result.data.length === 0) {
+                area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>Lion-Code Agent Harness</h1><p>此会话暂无消息，开始对话吧</p></div>';
+                return;
+            }
+            result.data.forEach(function(m) {
+                if (m.role === 'user') {
+                    self.appendMsg('user', self.formatContent(m.content || ''));
+                } else if (m.role === 'assistant') {
+                    var c = m.content || '';
+                    if (m.toolCalls && m.toolCalls.length > 0) {
+                        c += '\n\n' + m.toolCalls.map(function(t) { return '🔧 ' + t.name; }).join('\n');
+                    }
+                    if (c) self.appendMsg('bot', self.formatContent(c));
+                } else if (m.role === 'tool') {
+                    self.appendMsg('bot', '<span style="font-size:12px;color:#6a6a80">🔧 工具结果: ' + (m.toolName || '') + '</span>');
+                }
+                // system消息不显示
+            });
+          })
+          .catch(function() {
+            area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>Lion-Code Agent Harness</h1><p>历史加载失败</p></div>';
+          });
     },
 
     deleteSession: function(sid) {
@@ -366,9 +524,23 @@ var App = {
 
     // ====== 模式 ======
     setMode: function(btn, mode) {
-        document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
-        btn.classList.add('active');
+        this.setModeUi(mode);
         this.mode = mode;
+        // 同步到后端：当前会话立即按新模式工作
+        if (this.sessionId) {
+            fetch('/api/sessions/' + encodeURIComponent(this.sessionId) + '/mode', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({mode: mode})
+            }).catch(function() {});
+        }
+    },
+
+    // 仅更新界面高亮（恢复历史会话时使用）
+    setModeUi: function(mode) {
+        document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
+        var btn = document.querySelector('.mode-btn[data-mode="' + mode + '"]');
+        if (btn) btn.classList.add('active');
     },
 
     // ====== 聊天 ======
@@ -408,7 +580,7 @@ var App = {
             body: JSON.stringify({
                 sessionId: this.sessionId,
                 message: msg,
-                model: document.getElementById('modelSelect').value || 'gpt-4o',
+                model: document.getElementById('modelSelect').value || '',
                 thinkingLevel: document.getElementById('thinkingLevel').value || 'MEDIUM'
             })
         }).then(function(r) { return r.json(); })
@@ -579,10 +751,18 @@ var App = {
         var self = this;
         fetch('/api/providers/templates').then(function(r) { return r.json(); }).then(function(result) {
             if (!result.success) return;
-            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选择服务商，填入API Key即可使用</p>';
+            // 同时获取已保存的提供商配置用于预填
+            return fetch('/api/providers/configured').then(function(r2) { return r2.json(); })
+                .then(function(confRes) {
+                    return {templates: result.data, configured: (confRes && confRes.success) ? (confRes.data || []) : []};
+                });
+        }).then(function(payload) {
+            var self2 = self;
+            self2.useTokenPlan = false;
+            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选择服务商，填入API Key即可使用（配置自动保存，重启不丢失）</p>';
             html += '<div style="margin-bottom:12px"><select id="cfgProvider" style="width:100%" onchange="App.onProviderChange()"><option value="">-- 选择服务商 --</option>';
-            result.data.forEach(function(p) {
-                html += '<option value="' + p.providerId + '" data-url="' + p.standardBaseUrl + '" data-tp="' + p.supportsTokenPlan + '">' + p.displayName + '</option>';
+            payload.templates.forEach(function(p) {
+                html += '<option value="' + p.providerId + '" data-url="' + p.standardBaseUrl + '" data-tp="' + p.supportsTokenPlan + '" data-tpurl="' + (p.tokenPlanBaseUrl || p.standardBaseUrl) + '" data-proto="' + (p.protocolType || 'openai') + '">' + p.displayName + '</option>';
             });
             html += '</select></div>';
             html += '<div id="cfgDetails" style="display:none">';
@@ -591,7 +771,21 @@ var App = {
             html += '<div id="cfgTpBtn" style="margin-bottom:12px;display:none"><label style="font-size:12px;color:#a0a0b8">端点类型</label><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-ghost btn-sm active" id="epStandard" onclick="App.switchEndpoint(\'standard\')">普通按量</button><button class="btn btn-ghost btn-sm" id="epTokenPlan" onclick="App.switchEndpoint(\'tokenplan\')">Token-Plan</button></div></div>';
             html += '<button class="btn btn-primary" onclick="App.saveProvider()">保存配置</button>';
             html += '</div>';
-            self.openModal('API提供商设置', html);
+            self2.openModal('API提供商设置', html);
+
+            // 预填上次保存的配置
+            if (payload.configured.length > 0) {
+                var last = payload.configured[0];
+                var sel = document.getElementById('cfgProvider');
+                sel.value = last.providerId;
+                if (sel.value) {
+                    self2.onProviderChange();
+                    document.getElementById('cfgKey').value = last.apiKey || '';
+                    document.getElementById('cfgUrl').value = last.baseUrl || '';
+                    self2.useTokenPlan = !!last.useTokenPlan;
+                    if (last.useTokenPlan) self2.switchEndpoint('tokenplan');
+                }
+            }
         });
     },
 
@@ -611,39 +805,42 @@ var App = {
         var url = document.getElementById('cfgUrl').value;
         if (!sel.value || !key) { alert('请选择服务商并输入API Key'); return; }
         
+        var opt = sel.options[sel.selectedIndex];
+        var protocolType = opt.getAttribute('data-proto') || 'openai';
+        var adapterType = protocolType === 'anthropic' ? 'ANTHROPIC' : 'OPENAI_COMPATIBLE';
         var self = this;
-        // 保存提供商配置并同步到适配器
+        // 1. 保存提供商配置（持久化）
         fetch('/api/providers/configure', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({
                 providerId: sel.value,
                 apiKey: key,
+                useTokenPlan: !!self.useTokenPlan,
                 customBaseUrl: url
             })
         }).then(function(r) { return r.json(); })
           .then(function(result) {
             if (!result.success) { alert(result.error); return; }
-            // 同步配置到OpenAI适配器
+            // 2. 同步配置到对应适配器并激活（持久化）
             return fetch('/api/chat/adapter/config', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({baseUrl: url, apiKey: key})
+                body: JSON.stringify({baseUrl: url, apiKey: key, adapterType: adapterType})
             }).then(function(r) { return r.json(); });
           })
           .then(function(result) {
-            // 拉取模型列表
+            // 3. 拉取模型列表
             return fetch('/api/providers/' + sel.value + '/models', {method:'POST'})
                 .then(function(r) { return r.json(); });
           })
           .then(function(result) {
-            if (result && result.success && result.data && result.data.models) {
+            self.closeModal();
+            if (result && result.success && result.data && result.data.models && result.data.models.length > 0) {
                 self.fillModels(result.data.models);
-                self.closeModal();
                 alert('配置已保存，已加载 ' + result.data.models.length + ' 个模型');
             } else {
                 self.fillDefaultModels(sel.value);
-                self.closeModal();
                 alert('已保存配置（使用默认模型列表）');
             }
           })
@@ -716,7 +913,22 @@ var App = {
                 if (l.default) opt.selected = true;
                 tl.appendChild(opt);
             });
+            // 恢复上次保存的思考等级
+            if (this.savedThinkingLevel) {
+                tl.value = this.savedThinkingLevel;
+                this.savedThinkingLevel = '';
+            }
         }
+
+        // 持久化模型与思考等级选择（重启后自动恢复）
+        fetch('/api/chat/adapter/model', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                model: modelId,
+                thinkingLevel: tl.disabled ? '' : tl.value
+            })
+        }).catch(function() {});
     },
 
     switchEndpoint: function(type) {
@@ -725,14 +937,16 @@ var App = {
         if (type === 'standard') {
             std.classList.add('active'); std.style.background = '#6c5ce7'; std.style.color = 'white';
             tp.classList.remove('active'); tp.style.background = ''; tp.style.color = '';
+            this.useTokenPlan = false;
         } else {
             tp.classList.add('active'); tp.style.background = '#6c5ce7'; tp.style.color = 'white';
             std.classList.remove('active'); std.style.background = ''; std.style.color = '';
+            this.useTokenPlan = true;
         }
-        // 更新Base URL
+        // 更新Base URL（Token-Plan使用专属端点）
         var sel = document.getElementById('cfgProvider');
         var opt = sel.options[sel.selectedIndex];
-        var url = opt.getAttribute('data-url') || '';
+        var url = (type === 'tokenplan' ? opt.getAttribute('data-tpurl') : opt.getAttribute('data-url')) || '';
         document.getElementById('cfgUrl').value = url;
     },
 

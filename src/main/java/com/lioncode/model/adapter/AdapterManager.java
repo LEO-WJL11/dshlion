@@ -51,6 +51,25 @@ public class AdapterManager {
     }
 
     /**
+     * 恢复激活适配器（启动恢复/配置保存场景）
+     * 不做可用性检查：即使apiKey尚未配置也先设为激活，
+     * 配置保存后即生效。
+     */
+    public boolean restoreActiveAdapter(ModelAdapter.AdapterType type) {
+        ModelAdapter adapter = adapters.get(type);
+        if (adapter == null) {
+            log.error("未找到适配器类型: {}", type);
+            return false;
+        }
+        ModelAdapter old = this.activeAdapter;
+        this.activeAdapter = adapter;
+        if (old != adapter) {
+            log.info("激活适配器已恢复/切换: {} -> {}", old.getName(), adapter.getName());
+        }
+        return true;
+    }
+
+    /**
      * 切换适配器
      * 切换过程保护关键会话状态
      */
