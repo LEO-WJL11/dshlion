@@ -7,5 +7,6 @@ public record ChatRequest(
     String sessionId,
     String message,
     String model,
-    String thinkingLevel
+    String thinkingLevel,
+    Boolean isSteer
 ) {}

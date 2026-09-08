@@ -12,17 +12,20 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 审批策略管理器
  * 
- * 管理工具执行的审批策略：
- * - 自动批准：低风险操作
- * - 需要确认：中风险操作
- * - 禁止执行：高风险操作
+ * 管理工具执行的审批策略，已接入AgentLoop执行链路：
+ * - 自动批准：直接执行
+ * - 需要确认：拒绝执行并明确提示（用户可在设置中把该工具改为自动批准）
+ * - 禁止执行：拒绝执行
+ * 
+ * 默认策略：所有工具自动批准（保持开箱即用），
+ * 用户可通过 /api/approvals 接口或设置面板收紧特定工具的审批策略。
  */
 @Component
 public class ApprovalPolicy {
 
     private static final Logger log = LoggerFactory.getLogger(ApprovalPolicy.class);
 
-    /** 自动批准的工具ID */
+    /** 自动批准的工具ID（只读操作默认在此集合） */
     private final Set<String> autoApprovedTools = ConcurrentHashMap.newKeySet();
 
     /** 需要确认的工具ID */
@@ -32,7 +35,7 @@ public class ApprovalPolicy {
     private final Set<String> blockedTools = ConcurrentHashMap.newKeySet();
 
     public ApprovalPolicy() {
-        // 默认自动批准的工具（只读操作）
+        // 默认自动批准的工具（只读操作，显式登记以便查询）
         autoApprovedTools.addAll(Set.of(
             "tool.file.read", "tool.file.list", "tool.file.search", "tool.file.glob",
             "tool.file.info", "tool.file.headtail", "tool.file.wc", "tool.file.linecount",
@@ -43,32 +46,33 @@ public class ApprovalPolicy {
             "tool.code.cron", "tool.code.number", "tool.code.markdown", "tool.code.escape",
             "tool.web.search", "tool.http.get", "tool.web.fetch", "tool.web.dns"
         ));
-
-        // 需要确认的工具（写操作）
-        requiresConfirmationTools.addAll(Set.of(
-            "tool.file.write", "tool.file.modify", "tool.file.delete",
-            "tool.file.copy", "tool.file.move", "tool.file.mkdir", "tool.file.touch",
-            "tool.file.append", "tool.file.chmod", "tool.shell.execute",
-            "tool.git.commit", "tool.git.branch", "tool.git.stash", "tool.git.init",
-            "tool.http.post", "tool.web.download"
-        ));
+        // 注意：写操作（write/shell/git.commit等）默认不在任何集合中，
+        // 按"未知默认自动批准"规则处理，保证Agent开箱可用；
+        // 需要收紧时由用户显式设置 CONFIRM / BLOCK。
     }
 
     /**
-     * 检查工具是否需要审批
+     * 检查工具是否需要审批（已接入AgentLoop.executeTool）
      */
     public ApprovalResult checkApproval(String toolId) {
         if (blockedTools.contains(toolId)) {
             return ApprovalResult.blocked("工具已被禁止: " + toolId);
         }
-        if (autoApprovedTools.contains(toolId)) {
-            return ApprovalResult.autoApproved();
-        }
         if (requiresConfirmationTools.contains(toolId)) {
-            return ApprovalResult.requiresConfirmation("工具需要用户确认: " + toolId);
+            return ApprovalResult.requiresConfirmation(
+                "工具需要用户确认: " + toolId + "（请在设置中将其改为自动批准，或保持禁止）");
         }
-        // 默认需要确认
-        return ApprovalResult.requiresConfirmation("未知工具需要确认: " + toolId);
+        // 显式登记的只读工具 + 未登记工具均自动批准（开箱即用）
+        return ApprovalResult.autoApproved();
+    }
+
+    /**
+     * 获取工具当前生效的审批策略（供查询接口/设置面板使用）
+     */
+    public ToolPolicy getPolicy(String toolId) {
+        if (blockedTools.contains(toolId)) return ToolPolicy.BLOCK;
+        if (requiresConfirmationTools.contains(toolId)) return ToolPolicy.CONFIRM;
+        return ToolPolicy.AUTO_APPROVE;
     }
 
     /**
@@ -85,6 +89,17 @@ public class ApprovalPolicy {
             case BLOCK -> blockedTools.add(toolId);
         }
         log.info("工具审批策略已更新: {} -> {}", toolId, policy);
+    }
+
+    /**
+     * 批量获取工具策略（用于设置面板一次性展示）
+     */
+    public Map<String, ToolPolicy> getPolicies(Iterable<ToolPlugin> tools) {
+        Map<String, ToolPolicy> result = new ConcurrentHashMap<>();
+        for (ToolPlugin tool : tools) {
+            result.put(tool.getId(), getPolicy(tool.getId()));
+        }
+        return result;
     }
 
     /**

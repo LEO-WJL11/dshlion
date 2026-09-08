@@ -30,6 +30,14 @@ public class WorkspaceController {
     }
 
     /**
+     * 获取所有已注册工作区
+     */
+    @GetMapping
+    public ApiResponse<List<WorkspaceManager.Workspace>> getAllWorkspaces() {
+        return ApiResponse.ok(workspaceManager.getAllWorkspaces());
+    }
+
+    /**
      * 获取默认工作区（用户主目录下的Desktop目录，由后端动态计算）
      * 前端自动初始化使用，避免硬编码用户路径
      */
@@ -57,9 +65,34 @@ public class WorkspaceController {
     }
 
     /**
+     * 更新工作区权限等级（READ_ONLY / WORKSPACE_WRITE / FULL_ACCESS）
+     * 权限在AgentLoop执行工具时强制检查。
+     * 工作区ID是含反斜杠的绝对路径，不适合放URL路径，故用body传参。
+     */
+    @PostMapping("/permission")
+    public ApiResponse<WorkspaceManager.Workspace> setPermission(
+            @RequestBody PermissionRequest request) {
+        try {
+            WorkspaceManager.WorkspacePermission permission =
+                WorkspaceManager.WorkspacePermission.valueOf(request.permission());
+            if (workspaceManager.setPermission(request.id(), permission)) {
+                return ApiResponse.ok("权限已更新", workspaceManager.getWorkspace(request.id()).orElse(null));
+            }
+            return ApiResponse.error("工作区不存在: " + request.id());
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.error("无效的权限等级: " + request.permission());
+        }
+    }
+
+    /**
      * 注册请求
      */
     public record RegisterRequest(String path) {}
+
+    /**
+     * 权限更新请求
+     */
+    public record PermissionRequest(String id, String permission) {}
 
     /**
      * 常用路径

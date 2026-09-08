@@ -25,6 +25,9 @@ lion:
     default-path: ${user.home}/lion-code-workspace
     # 强制绑定工作区：未选择工作区不能创建会话
     force-bind: true
+    # 严格沙箱：绑定工作区后，工具的绝对路径必须位于工作区内
+    # （设为false可关闭限制，允许访问工作区外的路径）
+    strict: true
 
   # Agent主循环配置
   agent:

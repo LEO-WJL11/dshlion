@@ -3,11 +3,13 @@ package com.lioncode.core.agent;
 import com.lioncode.core.event.EventStore;
 import com.lioncode.core.event.LionEvent;
 import com.lioncode.core.plugin.PluginRegistry;
+import com.lioncode.core.plugin.skill.SkillPlugin;
 import com.lioncode.core.plugin.tool.ToolPlugin;
 import com.lioncode.core.plugin.tool.ToolResult;
 import com.lioncode.core.session.ConversationHistory;
 import com.lioncode.core.session.ConversationMessage;
 import com.lioncode.core.session.SessionManager;
+import com.lioncode.approval.ApprovalPolicy;
 import com.lioncode.model.adapter.*;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,6 +49,7 @@ public class AgentLoop {
     private final AgentControlManager agentControl;
     private final SessionManager sessionManager;
     private final com.lioncode.core.workspace.WorkspaceManager workspaceManager;
+    private final ApprovalPolicy approvalPolicy;
 
     /** 每个会话的系统提示词缓存 */
     private final Map<String, String> systemPromptCache = new ConcurrentHashMap<>();
@@ -54,7 +57,8 @@ public class AgentLoop {
     public AgentLoop(EventStore eventStore, PluginRegistry pluginRegistry,
                      ConversationHistory conversationHistory, AdapterManager adapterManager,
                      AgentControlManager agentControl, SessionManager sessionManager,
-                     com.lioncode.core.workspace.WorkspaceManager workspaceManager) {
+                     com.lioncode.core.workspace.WorkspaceManager workspaceManager,
+                     ApprovalPolicy approvalPolicy) {
         this.eventStore = eventStore;
         this.pluginRegistry = pluginRegistry;
         this.conversationHistory = conversationHistory;
@@ -62,6 +66,7 @@ public class AgentLoop {
         this.agentControl = agentControl;
         this.sessionManager = sessionManager;
         this.workspaceManager = workspaceManager;
+        this.approvalPolicy = approvalPolicy;
     }
 
     /**
@@ -90,7 +95,7 @@ public class AgentLoop {
         agentControl.reset(sessionId);
 
         // 3. 构建消息列表
-        List<ChatMessage> messages = buildMessages(sessionId, mode);
+        List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
 
         // 3.5 构建工具定义列表
         List<Map<String, Object>> toolDefinitions = buildToolDefinitions(mode);
@@ -212,7 +217,7 @@ public class AgentLoop {
             }
 
             // 10. 更新消息列表，继续下一轮
-            messages = buildMessages(sessionId, mode);
+            messages = buildMessages(sessionId, mode, userMessage);
         }
     }
 
@@ -238,7 +243,7 @@ public class AgentLoop {
                 // 新任务开始：清除之前的暂停/停止状态
                 agentControl.reset(sessionId);
 
-                List<ChatMessage> messages = buildMessages(sessionId, mode);
+                List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
                 ModelAdapter adapter = adapterManager.getActiveAdapter();
 
                 // 构建工具定义列表
@@ -341,9 +346,9 @@ public class AgentLoop {
                                 }
 
                                 // 继续下一轮（递归调用），使用更新后的消息列表
-                                List<ChatMessage> nextMessages = buildMessages(sessionId, mode);
+                                List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
                                 processStreamRound(sink, sessionId, nextMessages, model, thinkingLevel, 
-                                    adapter, toolDefinitions, mode, 1);
+                                    adapter, toolDefinitions, mode, userMessage, 1);
                             }
                         } catch (Exception e) {
                             log.error("流式处理工具调用失败", e);
@@ -373,13 +378,14 @@ public class AgentLoop {
      * @param adapter 模型适配器
      * @param toolDefinitions 工具定义列表
      * @param mode 工作模式
+     * @param userMessage 原始用户消息（技能适用性判断用）
      * @param currentRound 当前轮次（仅用于日志，无上限）
      */
     private void processStreamRound(reactor.core.publisher.FluxSink<AgentChunk> sink,
                                       String sessionId, List<ChatMessage> messages, String model,
                                       ThinkingLevel thinkingLevel, ModelAdapter adapter,
                                       List<Map<String, Object>> toolDefinitions, AgentMode mode,
-                                      int currentRound) {
+                                      String userMessage, int currentRound) {
         // 控制检查：暂停时阻塞等待，停止时中止流
         try {
             agentControl.checkControl(sessionId);
@@ -478,9 +484,9 @@ public class AgentLoop {
                                 + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
                         }
 
-                        List<ChatMessage> nextMessages = buildMessages(sessionId, mode);
+                        List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
                         processStreamRound(sink, sessionId, nextMessages, model, thinkingLevel, 
-                            adapter, toolDefinitions, mode, currentRound + 1);
+                            adapter, toolDefinitions, mode, userMessage, currentRound + 1);
                     }
                 } catch (Exception e) {
                     log.error("流式处理工具调用失败 (轮次 {})", currentRound, e);
@@ -582,6 +588,33 @@ public class AgentLoop {
             return;
         }
 
+        // 审批策略检查：禁止/需确认的工具直接拒绝并反馈给模型
+        ApprovalPolicy.ApprovalResult approval = approvalPolicy.checkApproval(tool.getId());
+        if (approval.action() == ApprovalPolicy.ApprovalAction.BLOCK
+                || approval.action() == ApprovalPolicy.ApprovalAction.CONFIRM) {
+            String error = approval.reason() != null ? approval.reason()
+                : "工具 " + toolName + " 需要用户确认后才能执行";
+            log.warn("审批拦截: {} ({})", toolName, approval.action().getDisplayName());
+            eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+                Map.of("toolName", toolName, "error", error, "approval", approval.action().name()),
+                "审批拦截: " + toolName);
+            conversationHistory.addMessage(
+                ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
+            return;
+        }
+
+        // 权限检查：工具所需权限不得高于会话工作区的授予权限
+        if (!checkPermission(sessionId, tool)) {
+            String error = "工具 " + toolName + " 需要更高权限（当前工作区权限等级不足，"
+                + "可在工作区设置中提升权限）";
+            log.warn(error);
+            eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+                Map.of("toolName", toolName, "error", error), error);
+            conversationHistory.addMessage(
+                ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
+            return;
+        }
+
         // 执行工具（设置会话工作区上下文：相对路径基于绑定的工作区解析）
         sessionManager.getSession(sessionId)
             .flatMap(s -> workspaceManager.getWorkspace(s.workspaceId()))
@@ -617,9 +650,31 @@ public class AgentLoop {
     }
 
     /**
+     * 权限检查：工具所需权限等级 vs 会话绑定工作区的授予权限
+     * 
+     * READ_ONLY 工作区只能执行只读工具；
+     * WORKSPACE_WRITE 可执行只读+工作区写工具（不可执行 FULL_ACCESS 工具）；
+     * FULL_ACCESS 全部放行。未绑定工作区时不限制（保持兼容）。
+     */
+    private boolean checkPermission(String sessionId, ToolPlugin tool) {
+        ToolPlugin.PermissionLevel required = tool.getRequiredPermission();
+        var grantedOpt = sessionManager.getSession(sessionId)
+            .flatMap(s -> workspaceManager.getWorkspace(s.workspaceId()))
+            .map(com.lioncode.core.workspace.WorkspaceManager.Workspace::permission);
+        if (grantedOpt.isEmpty()) {
+            return true;
+        }
+        return switch (grantedOpt.get()) {
+            case READ_ONLY -> required == ToolPlugin.PermissionLevel.READ_ONLY;
+            case WORKSPACE_WRITE -> required != ToolPlugin.PermissionLevel.FULL_ACCESS;
+            case FULL_ACCESS -> true;
+        };
+    }
+
+    /**
      * 构建模型消息列表
      */
-    private List<ChatMessage> buildMessages(String sessionId, AgentMode mode) {
+    private List<ChatMessage> buildMessages(String sessionId, AgentMode mode, String userMessage) {
         List<ChatMessage> messages = new ArrayList<>();
 
         // 会话绑定的工作区路径
@@ -628,8 +683,8 @@ public class AgentLoop {
             .map(ws -> ws.path())
             .orElse(null);
 
-        // 系统提示词
-        String systemPrompt = buildSystemPrompt(mode, workspacePath);
+        // 系统提示词（含模式专属提示词与适用技能的能力提示词）
+        String systemPrompt = buildSystemPrompt(mode, workspacePath, userMessage);
         messages.add(ChatMessage.system(systemPrompt));
 
         // 对话历史
@@ -668,7 +723,7 @@ public class AgentLoop {
      * 核心策略：给出明确的工具调用指令和具体示例，
      * 让模型知道必须调用工具而非只给文字建议。
      */
-    private String buildSystemPrompt(AgentMode mode, String workspacePath) {
+    private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是Lion-Code Agent，一个强大的AI编程助手。你的核心能力是通过调用工具来实际操作文件、执行命令、完成任务。\n\n");
 
@@ -680,6 +735,9 @@ public class AgentLoop {
 
         // 根据模式添加专属提示词（每个模式独立撰写，行为规则各不相同）
         prompt.append(modeInstructions(mode));
+
+        // 注入适用技能的领域能力提示词（按用户消息匹配）
+        prompt.append(buildSkillPrompt(userMessage));
 
         prompt.append("\n## ⚠️ 核心规则：必须调用工具\n\n");
         prompt.append("当用户请求涉及以下操作时，你**必须**调用相应工具来执行，**绝对不能**只给出文字描述或建议：\n");
@@ -835,6 +893,42 @@ public class AgentLoop {
 
                 """;
         };
+    }
+
+    /**
+     * 构建技能提示词片段
+     * 
+     * 扫描所有已注册的Skill技能插件，注入适用于当前用户消息的技能能力提示词，
+     * 让模型按领域最佳实践工作（此前技能仅注册但从未参与提示词构建）。
+     */
+    private String buildSkillPrompt(String userMessage) {
+        StringBuilder prompt = new StringBuilder();
+        List<SkillPlugin> applicable = pluginRegistry.getSkillPlugins().stream()
+            .filter(skill -> {
+                try {
+                    return userMessage != null && skill.isApplicable(userMessage);
+                } catch (Exception e) {
+                    log.warn("技能适用性判断异常: {}", skill.getId(), e);
+                    return false;
+                }
+            })
+            .toList();
+
+        if (applicable.isEmpty()) {
+            return "";
+        }
+
+        prompt.append("\n## 激活的领域技能\n\n");
+        for (SkillPlugin skill : applicable) {
+            String fragment = skill.getSystemPromptFragment();
+            if (fragment == null || fragment.isBlank()) {
+                continue;
+            }
+            prompt.append("### ").append(skill.getName()).append("\n\n");
+            prompt.append(fragment.trim()).append("\n\n");
+        }
+        log.debug("已注入 {} 个技能提示词片段", applicable.size());
+        return prompt.toString();
     }
 
     /**

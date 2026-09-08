@@ -1,75 +1,130 @@
 package com.lioncode.mcp;
 
+import com.lioncode.core.plugin.PluginRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * MCP协议桥接器
- * 
- * Model Context Protocol (MCP) 协议桥接，
- * 用于连接外部MCP服务器和工具。
+ * MCP 协议桥接器（管理器）
+ *
+ * Model Context Protocol (MCP) 客户端，用于连接外部 MCP 服务器，
+ * 把远程工具动态注册为本地 ToolPlugin 供 Agent 调用。
+ *
+ * 支持 stdio（LSP 风格帧）与 http（Streamable HTTP）两种传输，
+ * JSON-RPC 2.0 请求-响应按 id 匹配。
  */
 @Component
 public class McpProtocolBridge {
 
     private static final Logger log = LoggerFactory.getLogger(McpProtocolBridge.class);
 
-    /** 已注册的MCP服务器 */
-    private final Map<String, McpServer> servers = new ConcurrentHashMap<>();
+    private final PluginRegistry pluginRegistry;
 
-    /**
-     * 注册MCP服务器
-     */
-    public void registerServer(String name, String endpoint) {
-        McpServer server = new McpServer(name, endpoint, McpStatus.DISCONNECTED);
-        servers.put(name, server);
-        log.info("MCP服务器已注册: {} ({})", name, endpoint);
+    /** 已注册的 MCP 连接：名称 -> 连接对象 */
+    private final Map<String, McpConnection> connections = new ConcurrentHashMap<>();
+
+    public McpProtocolBridge(PluginRegistry pluginRegistry) {
+        this.pluginRegistry = pluginRegistry;
     }
 
     /**
-     * 连接MCP服务器
+     * 注册 MCP 服务器
      */
-    public boolean connect(String serverName) {
-        McpServer server = servers.get(serverName);
-        if (server == null) {
-            log.error("未找到MCP服务器: {}", serverName);
+    public void registerServer(String name, McpServerConfig config) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("服务器名称不能为空");
+        }
+        McpConnection existing = connections.get(name);
+        if (existing != null) {
+            // 重注册同名服务器：先断开旧连接
+            existing.disconnect();
+        }
+        connections.put(name, new McpConnection(name, config, pluginRegistry));
+        log.info("MCP 服务器已注册: {} (transport={})", name, config.transport());
+    }
+
+    /**
+     * 连接服务器并加载工具；失败时错误信息记录在状态里，不抛异常
+     *
+     * @return 是否连接成功
+     */
+    public boolean connect(String name) {
+        McpConnection conn = connections.get(name);
+        if (conn == null) {
+            log.error("未找到 MCP 服务器: {}", name);
             return false;
         }
-        // 简化实现：标记为已连接
-        servers.put(serverName, new McpServer(server.name(), server.endpoint(), McpStatus.CONNECTED));
-        log.info("MCP服务器已连接: {}", serverName);
-        return true;
+        return conn.connect();
     }
 
     /**
-     * 断开MCP服务器
+     * 断开服务器
      */
-    public void disconnect(String serverName) {
-        McpServer server = servers.get(serverName);
-        if (server != null) {
-            servers.put(serverName, new McpServer(server.name(), server.endpoint(), McpStatus.DISCONNECTED));
-            log.info("MCP服务器已断开: {}", serverName);
+    public void disconnect(String name) {
+        McpConnection conn = connections.get(name);
+        if (conn != null) {
+            conn.disconnect();
         }
     }
 
     /**
-     * 获取所有MCP服务器
+     * 移除服务器（先断开再移除）
      */
-    public Map<String, McpServer> getServers() {
-        return Map.copyOf(servers);
+    public void removeServer(String name) {
+        McpConnection conn = connections.remove(name);
+        if (conn != null) {
+            conn.disconnect();
+            log.info("MCP 服务器已移除: {}", name);
+        }
     }
 
     /**
-     * MCP服务器记录
+     * 获取所有服务器状态（按名称排序）
      */
-    public record McpServer(String name, String endpoint, McpStatus status) {}
+    public List<McpServer> getServers() {
+        return connections.values().stream()
+            .sorted(Comparator.comparing(McpConnection::getName))
+            .map(c -> toServer(c))
+            .toList();
+    }
 
     /**
-     * MCP状态枚举
+     * 获取单个服务器状态
+     */
+    public McpServer getServer(String name) {
+        McpConnection c = connections.get(name);
+        return c == null ? null : toServer(c);
+    }
+
+    private McpServer toServer(McpConnection c) {
+        return new McpServer(c.getName(), c.getConfig().transport(), c.getStatus(),
+            c.getToolCount(), c.getError());
+    }
+
+    /**
+     * MCP 服务器状态记录
+     */
+    public record McpServer(
+        /** 服务器名称 */
+        String name,
+        /** 传输类型：stdio / http */
+        String transport,
+        /** 连接状态 */
+        McpStatus status,
+        /** 已加载工具数 */
+        int toolCount,
+        /** 错误信息（失败时） */
+        String error
+    ) {}
+
+    /**
+     * MCP 状态枚举
      */
     public enum McpStatus {
         DISCONNECTED("未连接"),

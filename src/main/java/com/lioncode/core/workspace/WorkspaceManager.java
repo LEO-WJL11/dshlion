@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,14 +25,21 @@ public class WorkspaceManager {
     private final Map<String, Workspace> workspaces = new ConcurrentHashMap<>();
 
     /**
-     * 注册工作区
+     * 注册工作区（默认授予"工作区写"权限）
      */
     public Workspace registerWorkspace(String path) {
+        return registerWorkspace(path, WorkspacePermission.WORKSPACE_WRITE);
+    }
+
+    /**
+     * 注册工作区并指定权限等级
+     */
+    public Workspace registerWorkspace(String path, WorkspacePermission permission) {
         Path workspacePath = Path.of(path);
         String id = workspacePath.toAbsolutePath().toString();
-        Workspace workspace = new Workspace(id, path, WorkspacePermission.WORKSPACE_WRITE);
+        Workspace workspace = new Workspace(id, path, permission);
         workspaces.put(id, workspace);
-        log.info("工作区已注册: {}", path);
+        log.info("工作区已注册: {} (权限: {})", path, permission);
         return workspace;
     }
 
@@ -40,6 +48,28 @@ public class WorkspaceManager {
      */
     public Optional<Workspace> getWorkspace(String id) {
         return Optional.ofNullable(workspaces.get(id));
+    }
+
+    /**
+     * 更新工作区权限等级（只读/工作区写/全部权限）
+     * 权限在AgentLoop.executeTool中强制执行。
+     */
+    public boolean setPermission(String id, WorkspacePermission permission) {
+        Workspace existing = workspaces.get(id);
+        if (existing == null) {
+            log.warn("更新权限失败，工作区不存在: {}", id);
+            return false;
+        }
+        workspaces.put(id, new Workspace(existing.id(), existing.path(), permission));
+        log.info("工作区权限已更新: {} -> {}", id, permission);
+        return true;
+    }
+
+    /**
+     * 获取所有已注册工作区
+     */
+    public List<Workspace> getAllWorkspaces() {
+        return new java.util.ArrayList<>(workspaces.values());
     }
 
     /**

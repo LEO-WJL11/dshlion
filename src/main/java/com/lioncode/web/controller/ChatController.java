@@ -1,12 +1,12 @@
 package com.lioncode.web.controller;
 
 import com.lioncode.core.agent.AgentLoop;
-import com.lioncode.core.agent.AgentMode;
 import com.lioncode.core.agent.ThinkingLevel;
 import com.lioncode.core.session.SessionManager;
 import com.lioncode.model.adapter.AdapterManager;
 import com.lioncode.model.adapter.ModelAdapter;
 import com.lioncode.model.config.AppConfigStore;
+import com.lioncode.queue.SessionDispatcher;
 import com.lioncode.web.dto.ApiResponse;
 import com.lioncode.web.dto.ChatRequest;
 import org.springframework.http.MediaType;
@@ -15,12 +15,14 @@ import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 聊天控制器
  * 
- * 适配器配置、模型选择等用户配置均持久化到磁盘（AppConfigStore），
- * 应用重启后自动恢复。
+ * - 同步接口经SessionDispatcher队列串行处理（同会话并发安全 + Steer插队）
+ * - 流式接口与队列互斥（会话忙时拒绝）
+ * - 适配器配置、模型选择等用户配置均持久化到磁盘（AppConfigStore）
  */
 @RestController
 @RequestMapping("/api/chat")
@@ -30,59 +32,50 @@ public class ChatController {
     private final SessionManager sessionManager;
     private final AdapterManager adapterManager;
     private final AppConfigStore configStore;
+    private final SessionDispatcher dispatcher;
 
     public ChatController(AgentLoop agentLoop, SessionManager sessionManager, 
-                          AdapterManager adapterManager, AppConfigStore configStore) {
+                          AdapterManager adapterManager, AppConfigStore configStore,
+                          SessionDispatcher dispatcher) {
         this.agentLoop = agentLoop;
         this.sessionManager = sessionManager;
         this.adapterManager = adapterManager;
         this.configStore = configStore;
+        this.dispatcher = dispatcher;
     }
 
     /**
-     * 发送消息（同步模式）
+     * 发送消息（同步模式，经队列串行处理）
      */
     @PostMapping
     public ApiResponse<String> sendMessage(@RequestBody ChatRequest request) {
-        var sessionOpt = sessionManager.getSession(request.sessionId());
-        if (sessionOpt.isEmpty()) {
+        if (sessionManager.getSession(request.sessionId()).isEmpty()) {
             return ApiResponse.error("会话不存在: " + request.sessionId());
         }
-        var session = sessionOpt.get();
         try {
-            // 解析思考等级
-            ThinkingLevel level = ThinkingLevel.MEDIUM;
-            if (request.thinkingLevel() != null) {
-                try {
-                    level = ThinkingLevel.valueOf(request.thinkingLevel().toUpperCase());
-                } catch (IllegalArgumentException e) {
-                    // 使用默认值
-                }
-            }
-
-            // 获取模型名称：请求优先，其次持久化配置，最后默认
+            ThinkingLevel level = parseLevel(request.thinkingLevel());
             String model = request.model();
             if (model == null || model.isBlank()) {
                 model = getSavedModel(adapterManager.getActiveAdapter());
             }
 
-            // 调用Agent主循环（使用会话当前生效模式）
-            String response = agentLoop.processMessage(
-                request.sessionId(),
-                request.message(),
-                sessionManager.getEffectiveMode(request.sessionId()),
-                level,
-                model
-            );
+            // 经调度器入队处理：同会话串行，Steer=普通消息（前端已用isSteer字段区分）
+            boolean steer = Boolean.TRUE.equals(request.isSteer());
+            var future = dispatcher.submit(request.sessionId(), request.message(),
+                model, level, steer);
 
+            // 等待结果（模型调用自身有超时，此处给足冗余）
+            String response = future.get(10, TimeUnit.MINUTES);
             return ApiResponse.ok(response);
+        } catch (java.util.concurrent.TimeoutException e) {
+            return ApiResponse.error("处理超时");
         } catch (Exception e) {
             return ApiResponse.error("处理消息失败: " + e.getMessage());
         }
     }
 
     /**
-     * 发送消息（流式模式）
+     * 发送消息（流式模式，与队列互斥）
      */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<AgentLoop.AgentChunk> sendMessageStream(@RequestBody ChatRequest request) {
@@ -90,15 +83,13 @@ public class ChatController {
         if (sessionOpt.isEmpty()) {
             return Flux.just(AgentLoop.AgentChunk.error("会话不存在"));
         }
-        var session = sessionOpt.get();
 
-        ThinkingLevel level = ThinkingLevel.MEDIUM;
-        if (request.thinkingLevel() != null) {
-            try {
-                level = ThinkingLevel.valueOf(request.thinkingLevel().toUpperCase());
-            } catch (IllegalArgumentException ignored) {}
+        // 会话忙（有同步任务在跑/排队）时拒绝流式请求，避免并发写乱历史
+        if (!dispatcher.tryAcquireStream(request.sessionId())) {
+            return Flux.just(AgentLoop.AgentChunk.error("会话正忙，请等待当前任务完成"));
         }
 
+        ThinkingLevel level = parseLevel(request.thinkingLevel());
         String model = request.model();
         if (model == null || model.isBlank()) {
             model = getSavedModel(adapterManager.getActiveAdapter());
@@ -110,7 +101,17 @@ public class ChatController {
             sessionManager.getEffectiveMode(request.sessionId()),
             level,
             model
-        );
+        ).doFinally(signal -> dispatcher.releaseStream(request.sessionId()));
+    }
+
+    private ThinkingLevel parseLevel(String name) {
+        ThinkingLevel level = ThinkingLevel.MEDIUM;
+        if (name != null) {
+            try {
+                level = ThinkingLevel.valueOf(name.toUpperCase());
+            } catch (IllegalArgumentException ignored) {}
+        }
+        return level;
     }
 
     /**

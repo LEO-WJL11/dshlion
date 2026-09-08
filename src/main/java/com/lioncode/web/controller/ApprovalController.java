@@ -1,0 +1,95 @@
+package com.lioncode.web.controller;
+
+import com.lioncode.approval.ApprovalPolicy;
+import com.lioncode.core.plugin.PluginRegistry;
+import com.lioncode.core.plugin.tool.ToolPlugin;
+import com.lioncode.web.dto.ApiResponse;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 工具审批策略管理接口
+ * 
+ * 审批策略已在AgentLoop执行链路中强制生效：
+ * - AUTO_APPROVE: 直接执行（默认）
+ * - CONFIRM: 拒绝执行并提示（用户可改为自动批准）
+ * - BLOCK: 禁止执行
+ */
+@RestController
+@RequestMapping("/api/approvals")
+public class ApprovalController {
+
+    private final ApprovalPolicy approvalPolicy;
+    private final PluginRegistry pluginRegistry;
+
+    public ApprovalController(ApprovalPolicy approvalPolicy, PluginRegistry pluginRegistry) {
+        this.approvalPolicy = approvalPolicy;
+        this.pluginRegistry = pluginRegistry;
+    }
+
+    /**
+     * 获取所有工具的审批策略
+     */
+    @GetMapping
+    public ApiResponse<List<ToolPolicyInfo>> getPolicies() {
+        List<ToolPolicyInfo> list = pluginRegistry.getToolPlugins().stream()
+            .map(tool -> new ToolPolicyInfo(
+                tool.getId(),
+                tool.getName(),
+                tool.getDescription(),
+                approvalPolicy.getPolicy(tool.getId()).name()))
+            .toList();
+        return ApiResponse.ok(list);
+    }
+
+    /**
+     * 设置单个工具的审批策略
+     */
+    @PostMapping("/{toolId}")
+    public ApiResponse<String> setPolicy(@PathVariable("toolId") String toolId,
+                                         @RequestBody SetPolicyRequest request) {
+        if (pluginRegistry.getById(toolId).isEmpty()) {
+            return ApiResponse.error("工具不存在: " + toolId);
+        }
+        try {
+            ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(request.policy());
+            approvalPolicy.setToolPolicy(toolId, policy);
+            return ApiResponse.ok("策略已更新", policy.name());
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.error("无效策略: " + request.policy()
+                + "（可选: AUTO_APPROVE / CONFIRM / BLOCK）");
+        }
+    }
+
+    /**
+     * 批量设置策略
+     */
+    @PostMapping
+    public ApiResponse<Map<String, String>> setPolicies(@RequestBody Map<String, String> policies) {
+        int updated = 0;
+        for (Map.Entry<String, String> entry : policies.entrySet()) {
+            try {
+                ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(entry.getValue());
+                if (pluginRegistry.getById(entry.getKey()).isPresent()) {
+                    approvalPolicy.setToolPolicy(entry.getKey(), policy);
+                    updated++;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 跳过无效策略
+            }
+        }
+        return ApiResponse.ok("已更新 " + updated + " 个工具的策略", null);
+    }
+
+    /**
+     * 工具策略信息
+     */
+    public record ToolPolicyInfo(String toolId, String toolName, String description, String policy) {}
+
+    /**
+     * 设置策略请求
+     */
+    public record SetPolicyRequest(String policy) {}
+}

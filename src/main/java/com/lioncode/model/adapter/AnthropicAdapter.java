@@ -135,19 +135,29 @@ public class AnthropicAdapter implements ModelAdapter {
                             switch (eventType) {
                                 case "content_block_delta" -> {
                                     JsonNode delta = event.get("delta");
-                                    if (delta != null && "text_delta".equals(delta.get("type").asText())) {
+                                    if (delta == null) break;
+                                    int index = event.has("index") ? event.get("index").asInt() : 0;
+                                    if ("text_delta".equals(delta.get("type").asText())) {
                                         String text = delta.get("text").asText();
                                         sink.next(new ModelChunk(text, List.of(), false, null, null));
+                                    } else if ("input_json_delta".equals(delta.get("type").asText())) {
+                                        // 工具调用参数增量：与AgentLoop的累积器按index对接
+                                        String partialJson = delta.has("partial_json") 
+                                            ? delta.get("partial_json").asText() : "";
+                                        sink.next(new ModelChunk("",
+                                            List.of(new ModelChunk.ToolCallDelta(index, null, null, partialJson)),
+                                            false, null, null));
                                     }
                                 }
                                 case "content_block_start" -> {
                                     JsonNode block = event.get("content_block");
                                     if (block != null && "tool_use".equals(block.get("type").asText())) {
-                                        // 工具调用开始
+                                        // 工具调用开始：携带index，供参数增量按index累积
                                         String toolCallId = block.get("id").asText();
                                         String toolName = block.get("name").asText();
+                                        int index = event.has("index") ? event.get("index").asInt() : 0;
                                         sink.next(new ModelChunk("",
-                                            List.of(new ModelChunk.ToolCallDelta(0, toolCallId, toolName, null)),
+                                            List.of(new ModelChunk.ToolCallDelta(index, toolCallId, toolName, null)),
                                             false, null, null));
                                     }
                                 }
