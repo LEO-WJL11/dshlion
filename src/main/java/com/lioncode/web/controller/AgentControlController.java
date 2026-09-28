@@ -1,6 +1,7 @@
 package com.lioncode.web.controller;
 
 import com.lioncode.core.agent.AgentControlManager;
+import com.lioncode.core.question.UserQuestionService;
 import com.lioncode.web.dto.ApiResponse;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,9 +19,12 @@ import org.springframework.web.bind.annotation.*;
 public class AgentControlController {
 
     private final AgentControlManager agentControl;
+    private final UserQuestionService questionService;
 
-    public AgentControlController(AgentControlManager agentControl) {
+    public AgentControlController(AgentControlManager agentControl,
+                                  UserQuestionService questionService) {
         this.agentControl = agentControl;
+        this.questionService = questionService;
     }
 
     /**
@@ -54,6 +58,10 @@ public class AgentControlController {
 
     /**
      * 停止
+     *
+     * 除了给 AgentControlManager 打停止标记，还要**取消该会话上等待中的提问**：
+     * ask_user 工具是阻塞等待用户回答的，不主动放行的话，
+     * 用户点了停止、那个 worker 线程还会一直挂在那儿等满 5 分钟才回来。
      */
     @PostMapping("/stop")
     public ApiResponse<String> stop(@RequestBody ControlRequest request) {
@@ -61,7 +69,10 @@ public class AgentControlController {
             return ApiResponse.error("sessionId不能为空");
         }
         agentControl.stop(request.sessionId());
-        return ApiResponse.ok("已请求停止", null);
+        int cancelled = questionService.cancelSession(request.sessionId());
+        return ApiResponse.ok(cancelled > 0
+            ? "已请求停止（同时取消了 " + cancelled + " 个等待中的提问）"
+            : "已请求停止", null);
     }
 
     /**

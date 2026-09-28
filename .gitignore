@@ -40,16 +40,6 @@ Desktop.ini
 *.tar.gz
 *.rar
 hs_err_pid*
-# å‘å¸ƒç”¨fat jarï¼ˆæ ¹ç›®å½•ï¼Œéšä»“åº“åˆ†å‘ï¼‰
-!lion-code-agent-harness-1.0.0-SNAPSHOT.jar
-
-# ===== Python =====
-__pycache__/
-*.pyc
-
-# ===== æ‰“åŒ…äº§ç‰© =====
-output/
-*.exe
 
 # ===== æ—¥å¿— =====
 *.log
@@ -74,3 +64,55 @@ web/.cache/
 .env
 .env.local
 .env.*.local
+
+# ===== æ¨¡å‹æƒé‡ / å¤§äºŒè¿›åˆ¶ï¼ˆç»ä¸å…¥åº“ï¼‰=====
+*.gguf
+*.safetensors
+*.bin
+*.rom
+*.onnx
+
+# ===== æ‰“åŒ…äº§ç‰© =====
+dist/*.gguf
+dist/*.jar
+dist/runtime-vulkan/
+installer/release/
+release/
+
+# ===== è°ƒç ”èµ„æ–™ï¼ˆä½“ç§¯å¤§ã€éæºç ï¼‰=====
+_research/
+_hwres/
+
+# ===== æµ‹è¯•ä¸´æ—¶äº§ç‰© =====
+_fc_ws/
+_fc_requests.jsonl
+_fc_broken_log.jsonl
+_box_bios/*.rom
+_LionBoxTest/
+*.eext
+
+# ===== è°ƒç ” PDF =====
+*.pdf
+usbresearch/
+dl/
+
+# ===== ä¸´æ—¶æ–‡ä»¶ / æŠ“å–æ®‹ç•™ =====
+/_*.txt
+/_*.pid
+/_*.log.err
+/_mimo_proxy.jsonl
+/fetch*.py
+/grepdl.py
+/7840u.html
+/v3000.html
+/launcher.ps1
+
+# E2E ²âÊÔÆÚ¼äµÄÓÃ»§ÅäÖÃ±¸·İ£¨º¬ÕæÊµÃÜÔ¿£¬¾ø²»Èë¿â£©
+_app-config.e2e-backup.json
+
+# jlink Éú³ÉµÄ×Ô´øÔËĞĞÊ±£¨¹¹½¨²úÎï£©
+dist/runtime-jre/
+
+# NOTE: the shipped installer in installer/release/ is deliberately force-added (git add -f).
+# Git cannot re-include files inside an ignored directory, so -f is required.
+# Rebuild: ISCC.exe installer\LionBox.iss  (keeps the path ignored for future builds)

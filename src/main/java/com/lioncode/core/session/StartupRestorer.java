@@ -17,7 +17,7 @@ import java.util.Map;
  * 
  * 应用启动时执行：
  * 1. 从磁盘恢复所有会话（含绑定的工作区）
- * 2. 恢复两个模型适配器的 baseUrl/apiKey 配置
+ * 2. 恢复模型适配器的 baseUrl 配置（指向盒子本地运行时）
  * 3. 恢复上次激活的适配器
  * 
  * 对话历史由 ConversationHistory 自行恢复。
@@ -60,7 +60,7 @@ public class StartupRestorer implements ApplicationRunner {
                 workspaceManager.registerWorkspace(session.workspaceId());
             }
             sessionManager.restoreSession(session.sessionId(), session.workspaceId(),
-                session.mode(), session.createdAt());
+                session.mode(), session.createdAt(), session.name());
         }
         log.info("已恢复 {} 个会话", sessions.size());
     }
@@ -84,19 +84,35 @@ public class StartupRestorer implements ApplicationRunner {
 
     private void applyAdapterConfig(ModelAdapter.AdapterType type, String key) {
         Map<String, Object> saved = configStore.getMap(key);
-        if (saved.isEmpty()) {
+        String baseUrl = saved.get("baseUrl") instanceof String s ? s : null;
+        String apiKey = saved.get("apiKey") instanceof String s ? s : null;
+
+        // 盒子出厂零配置：适配器级配置缺失时，回落到应用级默认（AppConfigStore
+        // 已把 baseUrl 强制指向本地模型运行时），避免首次开机适配器不可用。
+        // 仅对OpenAI兼容协议生效：本地运行时只说该协议。
+        if ((baseUrl == null || baseUrl.isBlank())
+                && type == ModelAdapter.AdapterType.OPENAI_COMPATIBLE) {
+            String fallback = configStore.get("baseUrl", null);
+            if (fallback instanceof String s && !s.isBlank()) {
+                baseUrl = s;
+                log.info("适配器 {} 未保存端点，回落到盒子默认本地端点: {}", type, baseUrl);
+            }
+        }
+
+        if (baseUrl == null && apiKey == null) {
             return;
         }
+        final String resolvedBaseUrl = baseUrl != null ? baseUrl : "";
+        final String resolvedApiKey = apiKey != null ? apiKey : "";
         adapterManager.getAdapter(type).ifPresent(adapter -> {
-            String baseUrl = saved.get("baseUrl") instanceof String s ? s : null;
-            String apiKey = saved.get("apiKey") instanceof String s ? s : null;
-            if (baseUrl != null || apiKey != null) {
-                adapter.updateConfig(Map.of(
-                    "baseUrl", baseUrl != null ? baseUrl : "",
-                    "apiKey", apiKey != null ? apiKey : ""
-                ));
-                log.info("适配器配置已恢复: {} (baseUrl={})", type, baseUrl);
+            // 本地运行时不需要API-Key：不写入空白键，避免覆盖适配器内部状态
+            Map<String, Object> cfg = new java.util.HashMap<>();
+            cfg.put("baseUrl", resolvedBaseUrl);
+            if (!resolvedApiKey.isBlank()) {
+                cfg.put("apiKey", resolvedApiKey);
             }
+            adapter.updateConfig(cfg);
+            log.info("适配器配置已恢复: {} (baseUrl={})", type, resolvedBaseUrl);
         });
     }
 }

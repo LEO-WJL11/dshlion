@@ -116,12 +116,9 @@ function callLionCode(sessionId, message) {
 async function setupLionCodeMiMo() {
     console.log('\n🦁 配置Lion-Code MiMo适配器...');
     
-    // 工作区使用脚本运行目录，可设置环境变量 LION_WORKSPACE 覆盖
-    const WS_PATH = process.env.LION_WORKSPACE || process.cwd();
-    
     // 先创建工作区
     try {
-        const wsBody = JSON.stringify({ path: WS_PATH });
+        const wsBody = JSON.stringify({ path: 'C:\\Users\\Leo\\Desktop\\lion-code' });
         await new Promise((resolve, reject) => {
             const req = http.request({
                 hostname: 'localhost', port: 8080, path: '/api/workspaces',
@@ -132,7 +129,7 @@ async function setupLionCodeMiMo() {
     } catch (e) {}
 
     // 创建会话
-    const sessionBody = JSON.stringify({ workspaceId: WS_PATH, mode: 'STANDARD' });
+    const sessionBody = JSON.stringify({ workspaceId: 'C:\\Users\\Leo\\Desktop\\lion-code', mode: 'STANDARD' });
     const sessionResult = await new Promise((resolve, reject) => {
         const req = http.request({
             hostname: 'localhost', port: 8080, path: '/api/sessions',

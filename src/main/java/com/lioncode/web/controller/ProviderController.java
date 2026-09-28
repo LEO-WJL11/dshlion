@@ -12,15 +12,14 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * API提供商配置控制器
+ * 模型提供商配置控制器
+ * 
+ * 盒子说明：本产品为硬件一体机，内置模板只有一项——随盒子交付的本地模型运行时。
+ * 不再提供任何云端厂商模板、API-Key录入或Token-Plan订阅网关。
  * 
  * 功能：
- * - 内置完整主流国内外服务商模板
- * - 每个模板内置普通按量端点
- * - 支持Token-Plan的厂商额外内置Token-Plan订阅网关端点
- * - UI下拉框切换普通端点 / Token-Plan端点
- * - 用户填入API-Key后自动调用/v1/models拉取模型列表
- * - 识别Token-Plan返回的TPM、RPM限流信息
+ * - 内置本地模型运行时模板（回环地址，OpenAI兼容协议）
+ * - 调用本地 /v1/models 拉取模型列表（失败回落内置模型清单）
  * - 配置持久化到磁盘，应用重启后自动恢复
  */
 @RestController
@@ -100,6 +99,12 @@ public class ProviderController {
 
             if (template.isEmpty() && request.customBaseUrl() == null) {
                 return ApiResponse.error("未找到提供商模板: " + request.providerId());
+            }
+
+            // 盒子只允许本地模型运行时：拒绝任何非回环的自定义端点
+            if (template.isEmpty() && !isLoopbackUrl(request.customBaseUrl())) {
+                return ApiResponse.error("本产品仅支持盒子本地模型端点（回环地址），不支持外部服务商: " 
+                    + request.providerId());
             }
 
             // 确定Base URL
@@ -220,13 +225,16 @@ public class ProviderController {
 
             log.info("拉取模型列表: {} ({})", instance.displayName(), modelsUrl);
 
-            var request = java.net.http.HttpRequest.newBuilder()
+            var requestBuilder = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(modelsUrl))
                 .timeout(java.time.Duration.ofSeconds(30))
-                .header("Authorization", "Bearer " + instance.apiKey())
                 .header("Accept", "application/json")
-                .GET()
-                .build();
+                .GET();
+            // 本地运行时无需鉴权：未配置API-Key时不发送 Authorization 头
+            if (instance.apiKey() != null && !instance.apiKey().isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + instance.apiKey());
+            }
+            var request = requestBuilder.build();
 
             var response = MODEL_HTTP_CLIENT.send(request,
                 java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
@@ -267,6 +275,19 @@ public class ProviderController {
     private static String truncate(String s, int maxLen) {
         if (s == null) return "";
         return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+
+    /**
+     * 判断给定Base URL是否为回环地址（盒子本地模型运行时）
+     */
+    private static boolean isLoopbackUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        String lower = url.trim().toLowerCase();
+        return lower.startsWith("http://127.0.0.1") || lower.startsWith("https://127.0.0.1")
+            || lower.startsWith("http://localhost") || lower.startsWith("https://localhost")
+            || lower.startsWith("http://[::1]") || lower.startsWith("https://[::1]");
     }
 
     /**

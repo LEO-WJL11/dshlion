@@ -180,17 +180,21 @@
                 <version>3.3.1</version>
                 <configuration>
                     <encoding>UTF-8</encoding>
+                    <!-- WAV 提示音是二进制资源：不能按 UTF-8 做占位符过滤，
+                         否则 MalformedInputException 直接构建失败（或静默破坏字节）。
+                         仅对 wav 关闭过滤，其余资源行为完全不变。 -->
+                    <nonFilteredFileExtensions>
+                        <nonFilteredFileExtension>wav</nonFilteredFileExtension>
+                    </nonFilteredFileExtensions>
                 </configuration>
             </plugin>
         </plugins>
 
         <!-- 资源目录配置 -->
         <resources>
-            <!-- 关闭资源过滤：${...}占位符保留到运行时由Spring解析，
-                 避免构建机器用户目录等本机信息被打包进产物 -->
             <resource>
                 <directory>src/main/resources</directory>
-                <filtering>false</filtering>
+                <filtering>true</filtering>
             </resource>
             <!-- 打包前端静态资源 -->
             <resource>

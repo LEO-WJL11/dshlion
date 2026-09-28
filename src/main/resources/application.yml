@@ -3,6 +3,9 @@
 # =============================================================
 server:
   port: 8080
+  # 只监听回环地址：这是本机一体机软件，配置里会存用户自己的 API Key，
+  # 绑 0.0.0.0 的话同一局域网内任何人都能把它读走。
+  address: 127.0.0.1
   servlet:
     context-path: /
 
@@ -58,18 +61,90 @@ lion:
     default-mode: FIFO
 
   # 模型适配器配置（用户通过UI配置，此处为默认模板）
+  # 盒子说明：出厂只对接本地模型运行时，不配置任何云端服务商与API-Key
   model:
     adapters:
-      # OpenAI兼容适配器（默认）
+      # OpenAI兼容适配器（默认，指向盒子本地模型运行时）
       openai-compatible:
+        enabled: true
+        base-url: "http://127.0.0.1:8788/v1"
+        # 本地运行时无需鉴权，保持为空即不发送 Authorization 头
+        api-key: ""
+      # Messages API原生适配器（出厂不预设端点，需显式配置才可用）
+      messages:
         enabled: true
         base-url: ""
         api-key: ""
-      # Anthropic Claude原生适配器
-      anthropic:
-        enabled: true
-        base-url: "https://api.anthropic.com"
-        api-key: ""
+
+# =============================================================
+# 模型盒子（LionBox）本地模型运行时
+# =============================================================
+lionbox:
+  # 盒子本地模型运行时（随盒子一起交付，绑定回环地址，不对外暴露）
+  runtime:
+    host: 127.0.0.1
+    port: 8788
+    model-file: lion-merged-Q8_0.gguf
+    model-name: MiMo-V2.6-Distill-Qwen-9B
+    # 本地运行时的OpenAI兼容端点根地址（供适配器与应用默认配置使用）
+    base-url: http://127.0.0.1:8788/v1
+
+    # ---- 惰性加载 ----
+    # true  = 应用启动时不加载模型，等用户发出第一条消息再拉起 llama-server
+    #        （用户如果用「自定义 API」模式，本地模型永远不会被加载）
+    # false = 退回旧行为：一旦有请求就确保本地模型在跑（仍然不会在启动时加载）
+    lazy-load: true
+    # 运行时可执行文件；留空=自动找 <程序目录>/runtime-vulkan/llama-server.exe
+    exe: ""
+    # 模型文件完整路径；留空=自动找 <程序目录>/<model-file>
+    model-path: ""
+    # 上下文长度：这个模型的原生训练上下文就是 256K（GGUF 里 context_length=262144），
+    # 不需要 RoPE/YaRN 外推
+    ctx-size: 262144
+    # KV cache 量化类型：256K 上下文下 KV 是显存大头，q4_0 比 f16 省 3.56 倍
+    # （实测 32K 对照：f16 = 1024MiB，q4_0 = 288MiB）
+    # 留空或写 f16 = 不量化
+    kv-cache-type: q4_0
+    # flash attention：量化 KV 必须开，否则 llama.cpp 直接拒绝该类型
+    flash-attn: true
+    # 并行 slot 数：llama-server 会把 -c 平均分给各 slot，
+    # 给 1 个 slot 才能让单次对话独占完整的 256K
+    parallel-slots: 1
+    # ---- 采样默认值（服务端）----
+    # 这几个不能省：llama-server 出厂是 temp 0.80 + repeat-penalty 1.00（关闭），
+    # 实测本地模型在这种配置下会跑飞（一路重复输出工具调用分片、3000+ token 不停，
+    # 请求直接撞读超时）。降温度 + 开重复惩罚后即稳定。
+    temperature: 0.2
+    top-p: 0.9
+    repeat-penalty: 1.05
+    repeat-last-n: 256
+    # 单次生成上限：默认 -1 会一路生成到把 256K 上下文写满，必须封顶
+    max-predict: 4096
+    # 启动超时（秒）：Q8 权重 8.9GB + 256K KV，实测冷启动约 10~40 秒，给足冗余
+    start-timeout-seconds: 300
+    # ---- 模型自动下载（首次运行"装完即用"）----
+    # 安装包不再内置 8.9GB 权重，首次用到时从 ModelScope 自动拉取。
+    # 走 repo 接口（302 到 CDN），只用 JDK 自带 HttpClient —— 不依赖 Python / modelscope CLI。
+    # 手动等价命令（给运维/离线下载用）：
+    #   modelscope download --model lionnezha/lion-models lion-merged-Q8_0.gguf --local_dir .
+    model-repo: lionnezha/lion-models
+    model-revision: master
+    # 关掉它 = 只认本地已有权重（离线/内网部署）
+    auto-download: true
+    # 下载完至少这么大才算模型（防把错误页/半截文件当权重）
+    min-model-bytes: 1000000000
+
+  # ---- 开机预热（PrewarmService）----
+  # 预填充（prompt processing）是 CPU 推理的算力瓶颈：系统提示词 + 54 个工具定义
+  # 有 8-9K token，冷启动第一条消息可能要等几分钟。预热把这段开销挪到用户提问之前
+  # （也顺带实测出预填充速度，日志里会打）。
+  prewarm:
+    # 客户端默认关闭：用户可能只想看看界面，或打算用自己的 API，没必要一开机就占几 G 内存
+    # 盒子版设为 true：开机即加载模型并预热
+    on-start: false
+    enabled: true
+    # true = 连用户自填的云端 API 也预热（默认只预热自带端点，免得白花 token 费用）
+    force: false
 
 logging:
   level:

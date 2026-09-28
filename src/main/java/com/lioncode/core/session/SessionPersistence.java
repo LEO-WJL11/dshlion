@@ -36,6 +36,10 @@ public class SessionPersistence {
     private static ObjectMapper createMapper() {
         ObjectMapper m = new ObjectMapper();
         m.registerModule(new JavaTimeModule());
+        // 会话记录里后来才加的 name 字段：老版本存下来的 json 没有这个键，
+        // 必须容忍缺失（否则启动时会当成"损坏的会话文件"整条跳过，历史会话全丢）。
+        m.disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES);
+        m.disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         return m;
     }
 

@@ -33,15 +33,18 @@ public class ChatController {
     private final AdapterManager adapterManager;
     private final AppConfigStore configStore;
     private final SessionDispatcher dispatcher;
+    private final com.lioncode.core.session.SessionTitleService titleService;
 
-    public ChatController(AgentLoop agentLoop, SessionManager sessionManager, 
+    public ChatController(AgentLoop agentLoop, SessionManager sessionManager,
                           AdapterManager adapterManager, AppConfigStore configStore,
-                          SessionDispatcher dispatcher) {
+                          SessionDispatcher dispatcher,
+                          com.lioncode.core.session.SessionTitleService titleService) {
         this.agentLoop = agentLoop;
         this.sessionManager = sessionManager;
         this.adapterManager = adapterManager;
         this.configStore = configStore;
         this.dispatcher = dispatcher;
+        this.titleService = titleService;
     }
 
     /**
@@ -61,6 +64,11 @@ public class ChatController {
 
             // 经调度器入队处理：同会话串行，Steer=普通消息（前端已用isSteer字段区分）
             boolean steer = Boolean.TRUE.equals(request.isSteer());
+
+            // 会话还没有名字的话，拿这条消息去让模型生成一个标题。
+            // 异步执行、失败有兜底，不会拖慢这条消息本身的响应。
+            titleService.generateAsync(request.sessionId(), request.message());
+
             var future = dispatcher.submit(request.sessionId(), request.message(),
                 model, level, steer);
 
@@ -94,6 +102,9 @@ public class ChatController {
         if (model == null || model.isBlank()) {
             model = getSavedModel(adapterManager.getActiveAdapter());
         }
+
+        // 首条消息触发会话标题生成（异步，失败有兜底）
+        titleService.generateAsync(request.sessionId(), request.message());
 
         return agentLoop.processMessageStream(
             request.sessionId(),
@@ -223,7 +234,8 @@ public class ChatController {
         if (model instanceof String s && !s.isBlank()) {
             return s;
         }
-        return "gpt-4o"; // 默认模型
+        // 出厂默认：盒子内置本地模型
+        return "MiMo-V2.6-Distill-Qwen-9B";
     }
 
     /**

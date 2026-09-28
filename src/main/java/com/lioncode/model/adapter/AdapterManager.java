@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 适配器管理器
  * 
  * 管理所有模型协议适配器的注册、切换和状态保护。
- * 支持OpenAI兼容接口和Anthropic Claude原生接口的热切换。
+ * 盒子出厂固定使用OpenAI兼容协议适配器对接本地模型运行时。
  * 切换过程保护关键会话状态。
  */
 @Component
@@ -52,7 +52,7 @@ public class AdapterManager {
 
     /**
      * 恢复激活适配器（启动恢复/配置保存场景）
-     * 不做可用性检查：即使apiKey尚未配置也先设为激活，
+     * 不做可用性检查：即使端点尚未配置也先设为激活，
      * 配置保存后即生效。
      */
     public boolean restoreActiveAdapter(ModelAdapter.AdapterType type) {

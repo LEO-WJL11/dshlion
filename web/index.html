@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lion-Code Agent Harness</title>
+    <title>LionBox - 本地 AI 编程助手</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: #e8e8f0; background: #1a1a2e; }
@@ -105,7 +105,7 @@
     <!-- 侧边栏 -->
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="logo"><span class="logo-icon">🦁</span><span class="logo-text">Lion-Code</span></div>
+            <div class="logo"><span class="logo-icon">🦁</span><span class="logo-text">LionBox</span></div>
             <button class="btn btn-primary btn-sm" style="width:100%" onclick="App.newSession()">＋ 新建对话</button>
         </div>
         <div class="sidebar-section">
@@ -142,7 +142,10 @@
                 <div class="breadcrumb"><span id="bcWs">工作区</span><span class="sep">›</span><span id="bcSession">新会话</span></div>
             </div>
             <div class="top-bar-right">
-                <span style="font-size:12px;color:#a0a0b8"><span class="adapter-dot"></span> <span id="adapterName">OpenAI兼容</span></span>
+                <span id="runtimeBanner" onclick="App.showSettings()" title="点这里切换模型来源"
+                      style="font-size:12px;color:#a0a0b8;margin-right:4px;cursor:pointer;
+                             padding:3px 8px;border:1px solid #2d2d4a;border-radius:6px"></span>
+                <span style="font-size:12px;color:#a0a0b8" title="接口调用格式"><span class="adapter-dot"></span> <span id="adapterName">就绪</span></span>
                 <select id="modelSelect" onchange="App.onModelChange()"><option value="">选择模型...</option></select>
                 <select id="thinkingLevel" disabled><option>选择模型后加载</option></select>
             </div>
@@ -151,18 +154,34 @@
         <div class="message-area" id="msgArea">
             <div class="welcome">
                 <div class="welcome-icon">🦁</div>
-                <h1>Lion-Code Agent Harness</h1>
-                <p>本地Agent运行时框架 · 51个插件 · 流式执行 · 双协议适配</p>
+                <h1>LionBox</h1>
+                <p>本地 AI 编程助手 · 51个插件 · 流式执行 · 模型完全本地运行</p>
                 <div class="features">
                     <div class="feature"><div class="fi">🔧</div><div class="ft">51个插件</div><div class="fd">4 Skill + 47 Tool</div></div>
                     <div class="feature"><div class="fi">⚡</div><div class="ft">流式执行</div><div class="fd">识别即调度</div></div>
-                    <div class="feature"><div class="fi">🔄</div><div class="ft">双协议适配</div><div class="fd">OpenAI + Anthropic</div></div>
+                    <div class="feature"><div class="fi">📦</div><div class="ft">盒子本地推理</div><div class="fd">无需联网 · 无需API Key</div></div>
                     <div class="feature"><div class="fi">📝</div><div class="ft">事件溯源</div><div class="fd">完整记录回放</div></div>
                 </div>
             </div>
         </div>
 
         <div class="input-area">
+            <!-- 模型提问面板：ask_user 工具调用时弹出，用户答完自动收起 -->
+            <div id="askUserPanel" style="display:none;max-width:800px;margin:0 auto 10px;
+                 background:#1a1a2e;border:1px solid #6c5ce7;border-radius:8px;padding:12px 14px">
+                <div style="font-size:12px;color:#a29bfe;margin-bottom:6px">🤖 模型需要你确认</div>
+                <div id="askUserText" style="font-size:14px;color:#e8e8f0;line-height:1.7;
+                     margin-bottom:10px;white-space:pre-wrap"></div>
+                <div id="askUserOptions" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <input id="askUserInput" placeholder="输入你的回答…"
+                           style="flex:1;padding:7px 12px;background:#12121f;border:1px solid #2d2d4a;
+                                  border-radius:6px;color:#e8e8f0;font-size:13px;box-sizing:border-box"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();App.submitAskUser();}">
+                    <button class="btn btn-primary btn-sm" onclick="App.submitAskUser()">提交回答</button>
+                </div>
+                <div id="askUserHint" style="font-size:11px;color:#6a6a80;margin-top:8px"></div>
+            </div>
             <div id="agentControls" style="display:none;max-width:800px;margin:0 auto 8px;align-items:center;gap:8px">
                 <button class="btn btn-ghost btn-sm" id="btnPause" onclick="App.togglePause()">⏸ 暂停</button>
                 <button class="btn btn-ghost btn-sm" onclick="App.stopAgent()" style="color:#e17055;border-color:#e17055">⏹ 停止</button>
@@ -205,7 +224,6 @@ var App = {
     appConfig: null,
     savedModel: '',
     savedThinkingLevel: '',
-    useTokenPlan: false,
     pickingWs: false,
 
     init: function() {
@@ -226,8 +244,11 @@ var App = {
     autoInit: function() {
         var self = this;
         this.loadPlugins();
+        // 顶部显示当前模型来源（本地模型 / 自定义 API），以及本地模型是否已加载
+        this.refreshRuntimeBanner();
         // 先恢复应用配置（模型、apiKey、baseUrl等），再恢复会话与历史
         this.restoreConfig(function() {
+            self.refreshRuntimeBanner();
             self.loadSessions(function(sessions) {
                 if (sessions && sessions.length > 0) {
                     // 有历史会话：恢复最近一个会话及其对话历史
@@ -237,7 +258,7 @@ var App = {
                     if (latest.mode) self.setModeUi(latest.mode);
                     document.getElementById('wsPath').textContent = latest.workspaceId;
                     document.getElementById('bcWs').textContent = latest.workspaceId;
-                    document.getElementById('bcSession').textContent = '会话 ' + latest.sessionId.substring(0,8);
+                    self.setBreadcrumbSession(latest.sessionId);
                     self.loadHistory(latest.sessionId);
                 } else {
                     // 无历史会话：注册默认工作区并创建会话
@@ -329,7 +350,7 @@ var App = {
               .then(function(result) {
                 if (result.success && result.data) {
                     self.sessionId = result.data.sessionId;
-                    document.getElementById('bcSession').textContent = '会话 ' + result.data.sessionId.substring(0,8);
+                    self.setBreadcrumbSession(result.data.sessionId);
                 }
               });
           })
@@ -419,7 +440,7 @@ var App = {
           .then(function(sres) {
             if (sres && sres.success && sres.data) {
                 self.sessionId = sres.data.sessionId;
-                document.getElementById('bcSession').textContent = '会话 ' + sres.data.sessionId.substring(0,8);
+                self.setBreadcrumbSession(sres.data.sessionId);
                 self.loadSessions();
                 self.clearMessages();
             }
@@ -438,13 +459,42 @@ var App = {
           .then(function(result) {
             if (result.success) {
                 self.sessionId = result.data.sessionId;
-                document.getElementById('bcSession').textContent = '会话 ' + result.data.sessionId.substring(0,8);
+                self.setBreadcrumbSession(result.data.sessionId);
                 self.loadSessions();
                 self.clearMessages();
             } else {
                 alert(result.error || '创建失败');
             }
         });
+    },
+
+    /** 会话在界面上的显示名：有名字用名字；还没命名的显示"新会话 + 时间"，绝不再显示UUID */
+    sessionLabel: function(s) {
+        if (s && s.name && s.name.trim()) return s.name;
+        var t = '';
+        if (s && s.createdAt) {
+            try {
+                var d = new Date(s.createdAt);
+                if (!isNaN(d.getTime())) {
+                    t = ' · ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+                }
+            } catch (e) { /* 时间解析失败就不显示 */ }
+        }
+        return '新会话' + t;
+    },
+
+    /** 把会话名写进顶部面包屑；没有名字时显示"新会话" */
+    setBreadcrumbSession: function(sid) {
+        var s = (this.sessionsData || []).filter(function(x) { return x.sessionId === sid; })[0];
+        var el = document.getElementById('bcSession');
+        if (!el) return;
+        if (s && s.name && s.name.trim()) {
+            el.textContent = s.name;
+        } else if (!sid) {
+            el.textContent = '新会话';
+        } else {
+            el.textContent = '新会话（发出第一条消息后自动命名）';
+        }
     },
 
     loadSessions: function(callback) {
@@ -458,20 +508,76 @@ var App = {
             }
             list.innerHTML = result.data.map(function(s) {
                 var active = s.sessionId === self.sessionId ? ' active' : '';
+                var label = self.sessionLabel(s);
+                var unnamed = !(s.name && s.name.trim());
+                // 双击会话名可以改名；未命名时用浅色提示
                 return '<div class="session-item' + active + '" onclick="App.switchSession(\'' + s.sessionId + '\')">' +
-                    '<span>' + s.sessionId.substring(0,8) + '...</span>' +
-                    '<button class="del-btn" onclick="event.stopPropagation();App.deleteSession(\'' + s.sessionId + '\')">×</button></div>';
+                    '<span class="s-name" style="' + (unnamed ? 'color:#6a6a80' : '') + '"' +
+                    ' title="双击重命名" ondblclick="event.stopPropagation();App.renameSession(\'' + s.sessionId + '\')">' +
+                    self.escapeHtml(label) + '</span>' +
+                    '<button class="del-btn" title="重命名" onclick="event.stopPropagation();App.renameSession(\'' + s.sessionId + '\')">✎</button>' +
+                    '<button class="del-btn" title="删除" onclick="event.stopPropagation();App.deleteSession(\'' + s.sessionId + '\')">×</button></div>';
             }).join('');
             self.sessionsData = result.data;
+            // 当前会话的名字可能刚由模型生成，同步到面包屑
+            var cur = (result.data || []).filter(function(x) { return x.sessionId === self.sessionId; })[0];
+            if (cur && cur.name && cur.name.trim()) {
+                document.getElementById('bcSession').textContent = cur.name;
+            }
             if (callback) callback(result.data);
         });
     },
 
+    escapeHtml: function(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    },
+
+    /**
+     * 修改会话名。
+     * 标题是模型在首条消息之后异步生成的，所以刚发完消息那几秒名字可能还没出来——
+     * 这里如果用户没看到名字就点了重命名，也允许他直接起一个（模型看到已有名字就不会再覆盖）。
+     */
+    renameSession: function(sid) {
+        var self = this;
+        var cur = (this.sessionsData || []).filter(function(x) { return x.sessionId === sid; })[0];
+        var old = (cur && cur.name) ? cur.name : '';
+        var name = prompt('给这个会话起个名字：', old);
+        if (name === null) return;                 // 取消
+        name = name.trim();
+        if (!name) return;
+        fetch('/api/sessions/' + encodeURIComponent(sid) + '/name', {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({name: name})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!res.success) { alert(res.error || '重命名失败'); return; }
+            if (self.sessionId === sid) document.getElementById('bcSession').textContent = name;
+            self.loadSessions();
+        });
+    },
+
+    /**
+     * 首条消息发出后，模型异步生成标题，这里轮询等它出现。
+     * 最多等 30 秒；等不到也没关系，用户可以自己双击改名。
+     */
+    pollSessionTitle: function(sid) {
+        var self = this;
+        var tries = 0;
+        var timer = setInterval(function() {
+            tries++;
+            var cur = (self.sessionsData || []).filter(function(x) { return x.sessionId === sid; })[0];
+            if (cur && cur.name && cur.name.trim()) { clearInterval(timer); self.loadSessions(); return; }
+            if (tries > 15) { clearInterval(timer); return; }
+            self.loadSessions();
+        }, 2000);
+    },
+
     switchSession: function(sid) {
         this.sessionId = sid;
-        document.getElementById('bcSession').textContent = '会话 ' + sid.substring(0,8);
-        // 同步该会话的工作模式到界面
         var s = (this.sessionsData || []).filter(function(x) { return x.sessionId === sid; })[0];
+        this.setBreadcrumbSession(sid);
+        // 同步该会话的工作模式到界面
         if (s && s.mode) {
             this.mode = s.mode;
             this.setModeUi(s.mode);
@@ -490,7 +596,7 @@ var App = {
           .then(function(r) { return r.json(); })
           .then(function(result) {
             if (!result.success || !result.data || result.data.length === 0) {
-                area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>Lion-Code Agent Harness</h1><p>此会话暂无消息，开始对话吧</p></div>';
+                area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>LionBox</h1><p>此会话暂无消息，开始对话吧</p></div>';
                 return;
             }
             result.data.forEach(function(m) {
@@ -509,7 +615,7 @@ var App = {
             });
           })
           .catch(function() {
-            area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>Lion-Code Agent Harness</h1><p>历史加载失败</p></div>';
+            area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>LionBox</h1><p>历史加载失败</p></div>';
           });
     },
 
@@ -574,6 +680,13 @@ var App = {
         if (this.pollTimer) clearInterval(this.pollTimer);
         this.pollTimer = setInterval(function() { self.pollEvents(); }, 800);
 
+        // 会话还没有名字的话，这条消息会触发模型生成标题（后端异步做），
+        // 这里起一个短轮询把生成好的名字拉回来显示。
+        var curSess = (this.sessionsData || []).filter(function(x) { return x.sessionId === self.sessionId; })[0];
+        if (!curSess || !curSess.name || !curSess.name.trim()) {
+            this.pollSessionTitle(this.sessionId);
+        }
+
         fetch('/api/chat', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
@@ -599,6 +712,8 @@ var App = {
     pollEvents: function() {
         var self = this;
         if (!this.sessionId || !this.processing) return;
+        // 顺带看一眼模型有没有在向我提问（ask_user 工具）
+        this.pollQuestion();
         fetch('/api/events/' + encodeURIComponent(this.sessionId) + '?after=' + this.lastEventTs)
           .then(function(r) { return r.json(); })
           .then(function(res) {
@@ -628,9 +743,83 @@ var App = {
           .catch(function() { /* 轮询失败忽略 */ });
     },
 
+    // ====== 模型提问（ask_user 工具）======
+    // 后端在等用户回答时会把问题挂成"待回答"，这里轮询到就弹面板。
+    // 用户在面板里答完 → POST 答案 → 后端放行 → 模型接着做。
+    pollQuestion: function() {
+        var self = this;
+        if (!this.sessionId || !this.processing) return;
+        fetch('/api/questions/pending?sessionId=' + encodeURIComponent(this.sessionId))
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (!res || !res.success) return;
+            var q = res.data;
+            if (q && q.id) {
+                if (self.currentQuestionId !== q.id) self.showAskUser(q);
+            } else if (self.currentQuestionId) {
+                self.hideAskUser();          // 已经答过或超时了，收起面板
+            }
+          })
+          .catch(function() { /* 轮询失败忽略 */ });
+    },
+
+    showAskUser: function(q) {
+        this.currentQuestionId = q.id;
+        var panel = document.getElementById('askUserPanel');
+        document.getElementById('askUserText').textContent = q.question || '';
+        var opts = document.getElementById('askUserOptions');
+        opts.innerHTML = '';
+        (q.options || []).forEach(function(o) {
+            var b = document.createElement('button');
+            b.className = 'btn btn-sm';
+            b.textContent = o;
+            b.onclick = function() { App.submitAskUser(o); };
+            opts.appendChild(b);
+        });
+        var input = document.getElementById('askUserInput');
+        input.value = '';
+        document.getElementById('askUserHint').textContent =
+            (q.options && q.options.length ? '可以点上面的选项，也可以自己输入；' : '')
+            + '不回答的话，模型等一会儿会自己往下走。';
+        panel.style.display = 'block';
+        input.focus();
+    },
+
+    hideAskUser: function() {
+        this.currentQuestionId = null;
+        var panel = document.getElementById('askUserPanel');
+        if (panel) panel.style.display = 'none';
+    },
+
+    submitAskUser: function(preset) {
+        var self = this;
+        if (!this.currentQuestionId) return;
+        var input = document.getElementById('askUserInput');
+        var answer = (preset != null ? preset : input.value || '').trim();
+        if (!answer) { input.focus(); return; }
+        var hint = document.getElementById('askUserHint');
+        fetch('/api/questions/answer', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({questionId: this.currentQuestionId, answer: answer})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (res && res.success) {
+                self.hideAskUser();
+                if (self.toolLines) {
+                    self.toolLines.push('<div style="font-size:12px;color:#a29bfe;margin-top:2px">💬 已回答：' +
+                        self.escapeHtml(answer) + '</div>');
+                    self.updateBotStatus('<span style="color:#6a6a80">思考中...</span>');
+                }
+            } else if (hint) {
+                hint.style.color = '#e17055';
+                hint.textContent = '✗ ' + ((res && res.error) || '提交失败');
+            }
+        }).catch(function(e) {
+            if (hint) { hint.style.color = '#e17055'; hint.textContent = '✗ ' + e; }
+        });
+    },
+
     // 刷新机器人气泡状态文字（保留已显示的工具调用行）
-    updateBotStatus: function(statusHtml) {
-        if (!this.currentBotDiv) return;
+    updateBotStatus: function(statusHtml) {        if (!this.currentBotDiv) return;
         this.currentBotDiv.querySelector('.msg-body').innerHTML = statusHtml + this.toolLines.join('');
     },
 
@@ -641,6 +830,7 @@ var App = {
         this.currentBotDiv = null;
         this.toolLines = [];
         if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+        this.hideAskUser();          // 任务结束了，提问面板也要收掉
         document.getElementById('agentControls').style.display = 'none';
         document.getElementById('sendBtn').disabled = false;
     },
@@ -704,7 +894,7 @@ var App = {
     },
 
     clearMessages: function() {
-        document.getElementById('msgArea').innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>Lion-Code Agent Harness</h1><p>选择会话或新建对话开始</p></div>';
+        document.getElementById('msgArea').innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>LionBox</h1><p>选择会话或新建对话开始</p></div>';
     },
 
     formatContent: function(text) {
@@ -748,9 +938,11 @@ var App = {
 
     // ====== 设置 ======
     showSettings: function() {
+        // 页签名要直白：本地模型不是"API提供商"，叫那个名字没人会点进来找本地模型
         var html = '<div style="display:flex;gap:8px;margin-bottom:16px">'
-            + '<button class="btn btn-sm" id="setTabProviders" onclick="App.settingsTab(\'providers\')">API提供商</button>'
+            + '<button class="btn btn-sm" id="setTabProviders" onclick="App.settingsTab(\'providers\')">模型来源（本地 / API）</button>'
             + '<button class="btn btn-sm" id="setTabApprovals" onclick="App.settingsTab(\'approvals\')">审批策略</button>'
+            + '<button class="btn btn-sm" id="setTabNotification" onclick="App.settingsTab(\'notification\')">音效提醒</button>'
             + '</div><div id="settingsContent"></div>';
         this.openModal('设置', html);
         this.settingsTab('providers');
@@ -759,7 +951,8 @@ var App = {
     // 设置页签切换
     settingsTab: function(tab) {
         var self = this;
-        var titles = {'providers':'setTabProviders', 'approvals':'setTabApprovals'};
+        var titles = {'providers':'setTabProviders', 'approvals':'setTabApprovals',
+                      'notification':'setTabNotification'};
         Object.keys(titles).forEach(function(t) {
             var b = document.getElementById(titles[t]);
             if (!b) return;
@@ -768,48 +961,457 @@ var App = {
         });
         if (tab === 'providers') self.renderProvidersTab();
         else if (tab === 'approvals') self.renderApprovalsTab();
+        else if (tab === 'notification') self.renderNotificationTab();
     },
 
-    // ====== 提供商页签 ======
+    // ====== 音效提醒页签 ======
+    // 任务完成 / 需要审批 / 任务出错时播放提示音。
+    // 试听走的是后端真实播放（POST /api/notification/test），和实际提醒完全同一条路径 ——
+    // 如果用浏览器 <audio> 放，会出现"试听挺响、真提醒没声"这种对不上的情况。
+    renderNotificationTab: function() {
+        fetch('/api/notification').then(function(r) { return r.json(); }).then(function(res) {
+            var c = (res && res.success && res.data) ? res.data : {};
+            var rowStyle = 'display:flex;align-items:center;justify-content:space-between;'
+                         + 'padding:9px 0;border-bottom:1px solid #23233a';
+            var nameStyle = 'font-size:13px;color:#e8e8f0';
+            var descStyle = 'font-size:11px;color:#6a6a80;margin-top:3px';
+            var chk = 'width:16px;height:16px;cursor:pointer;accent-color:#6c5ce7';
+
+            function row(id, label, desc, checked, disabled) {
+                return '<div style="' + rowStyle + '">'
+                     +   '<div><div style="' + nameStyle + '">' + label + '</div>'
+                     +   '<div style="' + descStyle + '">' + desc + '</div></div>'
+                     +   '<input type="checkbox" id="' + id + '" style="' + chk + '"'
+                     +   (checked ? ' checked' : '') + (disabled ? ' disabled' : '')
+                     +   ' onchange="App.onNotificationChange()">'
+                     + '</div>';
+            }
+
+            var html = '<p style="color:#a0a0b8;margin-bottom:14px;font-size:12px;line-height:1.7">'
+                + '在这些时机播放提示音，不用一直盯着屏幕。<br>'
+                + '音效由本机播放（不联网、不上传），改完立即生效。</p>';
+
+            html += row('ntfEnabled', '启用音效提醒', '总开关', c.enabled !== false);
+
+            var off = (c.enabled === false);
+            html += row('ntfDone', '任务完成', '一轮任务跑完、停下来等你时',
+                        c.soundDone !== false, off);
+            html += row('ntfApproval', '需要审批', '工具被审批策略拦下、要你确认时',
+                        c.soundApproval !== false, off);
+            html += row('ntfQuestion', '向你提问', '模型信息不足、用 ask_user 问你一件事时',
+                        c.soundQuestion !== false, off);
+            html += row('ntfError', '任务出错', '模型调用失败或被手动中止时',
+                        c.soundError !== false, off);
+
+            // 音量
+            var vol = (c.volume == null ? 80 : c.volume);
+            html += '<div style="padding:14px 0 4px">'
+                 +  '<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+                 +    '<span style="' + nameStyle + '">音量</span>'
+                 +    '<span id="ntfVolText" style="font-size:12px;color:#a0a0b8">' + vol + '</span>'
+                 +  '</div>'
+                 +  '<input type="range" id="ntfVolume" min="0" max="100" step="5" value="' + vol + '"'
+                 +  ' style="width:100%;accent-color:#6c5ce7"'
+                 +  ' oninput="document.getElementById(\'ntfVolText\').textContent=this.value"'
+                 +  ' onchange="App.onNotificationChange()">'
+                 +  '<div style="' + descStyle + '">0 = 静音</div>'
+                 + '</div>';
+
+            // 试听
+            html += '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #2d2d4a">'
+                 +  '<div style="' + nameStyle + ';margin-bottom:8px">试听</div>'
+                 +  '<button class="btn btn-sm" style="margin-right:8px" onclick="App.testSound(\'done\')">任务完成</button>'
+                 +  '<button class="btn btn-sm" style="margin-right:8px" onclick="App.testSound(\'approval\')">需要审批</button>'
+                 +  '<button class="btn btn-sm" style="margin-right:8px" onclick="App.testSound(\'question\')">向你提问</button>'
+                 +  '<button class="btn btn-sm" onclick="App.testSound(\'error\')">任务出错</button>'
+                 +  '<div style="' + descStyle + ';margin-top:8px">'
+                 +  '试听不受总开关和节流限制，可以连点；音量按上面那条走。</div>'
+                 + '</div>';
+
+            html += '<div id="ntfStatus" style="margin-top:12px;font-size:12px;color:#00b894"></div>';
+
+            document.getElementById('settingsContent').innerHTML = html;
+        });
+    },
+
+    /** 任一开关/音量变化：立即保存，不需要额外的"保存"按钮 */
+    onNotificationChange: function() {
+        var st = document.getElementById('ntfStatus');
+        var enabledEl = document.getElementById('ntfEnabled');
+        if (!enabledEl) return;
+        var body = {
+            enabled: enabledEl.checked,
+            soundDone: document.getElementById('ntfDone').checked,
+            soundApproval: document.getElementById('ntfApproval').checked,
+            soundQuestion: document.getElementById('ntfQuestion').checked,
+            soundError: document.getElementById('ntfError').checked,
+            volume: parseInt(document.getElementById('ntfVolume').value, 10)
+        };
+        // 总开关关掉时把分开关置灰；但不动它们的值，重新打开还能恢复原样
+        ['ntfDone','ntfApproval','ntfQuestion','ntfError'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.disabled = !body.enabled;
+        });
+        fetch('/api/notification', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(body)
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!st) return;
+            st.style.color = res.success ? '#00b894' : '#e17055';
+            st.textContent = res.success ? '✓ 已保存' : ('✗ ' + (res.error || '保存失败'));
+            setTimeout(function() { if (st) st.textContent = ''; }, 2000);
+        }).catch(function(e) {
+            if (st) { st.style.color = '#e17055'; st.textContent = '✗ 保存失败: ' + e; }
+        });
+    },
+
+    /** 试听：走后端真实播放，和实际提醒同一条路径 */
+    testSound: function(kind) {
+        var st = document.getElementById('ntfStatus');
+        fetch('/api/notification/test?kind=' + encodeURIComponent(kind), {method:'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (!st) return;
+                st.style.color = res.success ? '#00b894' : '#e17055';
+                st.textContent = (res.success ? '✓ ' : '✗ ')
+                               + (res.data || res.message || res.error || '');
+            })
+            .catch(function(e) {
+                if (st) { st.style.color = '#e17055'; st.textContent = '✗ ' + e; }
+            });
+    },
+
+    // ====== 模型来源页签（本地模型 / 自定义 API） ======
     renderProvidersTab: function() {
         var self = this;
-        fetch('/api/providers/templates').then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) return;
-            // 同时获取已保存的提供商配置用于预填
-            return fetch('/api/providers/configured').then(function(r2) { return r2.json(); })
-                .then(function(confRes) {
-                    return {templates: result.data, configured: (confRes && confRes.success) ? (confRes.data || []) : []};
-                });
-        }).then(function(payload) {
-            var self2 = self;
-            self2.useTokenPlan = false;
-            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选择服务商，填入API Key即可使用（配置自动保存，重启不丢失）</p>';
-            html += '<div style="margin-bottom:12px"><select id="cfgProvider" style="width:100%" onchange="App.onProviderChange()"><option value="">-- 选择服务商 --</option>';
-            payload.templates.forEach(function(p) {
-                html += '<option value="' + p.providerId + '" data-url="' + p.standardBaseUrl + '" data-tp="' + p.supportsTokenPlan + '" data-tpurl="' + (p.tokenPlanBaseUrl || p.standardBaseUrl) + '" data-proto="' + (p.protocolType || 'openai') + '">' + p.displayName + '</option>';
-            });
-            html += '</select></div>';
-            html += '<div id="cfgDetails" style="display:none">';
-            html += '<div style="margin-bottom:8px"><label style="font-size:12px;color:#a0a0b8">Base URL</label><input id="cfgUrl" style="width:100%;padding:6px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-family:monospace;font-size:13px" readonly></div>';
-            html += '<div style="margin-bottom:8px"><label style="font-size:12px;color:#a0a0b8">API Key</label><input id="cfgKey" type="password" style="width:100%;padding:6px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-size:13px" placeholder="输入API Key..."></div>';
-            html += '<div id="cfgTpBtn" style="margin-bottom:12px;display:none"><label style="font-size:12px;color:#a0a0b8">端点类型</label><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-ghost btn-sm active" id="epStandard" onclick="App.switchEndpoint(\'standard\')">普通按量</button><button class="btn btn-ghost btn-sm" id="epTokenPlan" onclick="App.switchEndpoint(\'tokenplan\')">Token-Plan</button></div></div>';
-            html += '<button class="btn btn-primary" onclick="App.saveProvider()">保存配置</button>';
-            html += '</div>';
-            document.getElementById('settingsContent').innerHTML = html;
+        fetch('/api/runtime/mode').then(function(r) { return r.json(); }).then(function(res) {
+            var d = (res && res.success && res.data) ? res.data : {};
+            var mode = d.mode || 'local';
+            var st = d.localStatus || {};
+            var inp = 'width:100%;padding:7px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-size:13px;box-sizing:border-box';
+            var mono = inp + ';font-family:monospace';
+            var lbl = 'font-size:12px;color:#a0a0b8;display:block;margin-bottom:4px';
 
-            // 预填上次保存的配置
-            if (payload.configured.length > 0) {
-                var last = payload.configured[0];
-                var sel = document.getElementById('cfgProvider');
-                sel.value = last.providerId;
-                if (sel.value) {
-                    self2.onProviderChange();
-                    document.getElementById('cfgKey').value = last.apiKey || '';
-                    document.getElementById('cfgUrl').value = last.baseUrl || '';
-                    self2.useTokenPlan = !!last.useTokenPlan;
-                    if (last.useTokenPlan) self2.switchEndpoint('tokenplan');
-                }
+            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选一种模型来源。'
+                     + '<b style="color:#e8e8f0">本地模型</b>用本机自带的权重，不联网、不要 Key；'
+                     + '<b style="color:#e8e8f0">自定义 API</b>填你自己的接口地址与密钥，'
+                     + '任何兼容 OpenAI 调用格式的服务都能用。</p>';
+
+            // ---- 模式切换 ----
+            html += '<div style="display:flex;gap:8px;margin-bottom:18px">'
+                 +  '<button id="modeLocal" class="btn ' + (mode === 'local' ? 'btn-primary' : '') + '" '
+                 +  'style="flex:1" onclick="App.setRuntimeMode(\'local\')">本地模型</button>'
+                 +  '<button id="modeCustom" class="btn ' + (mode === 'custom' ? 'btn-primary' : '') + '" '
+                 +  'style="flex:1" onclick="App.setRuntimeMode(\'custom\')">自定义 API</button>'
+                 +  '</div>';
+
+            // ---- 本地模型 ----
+            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px;margin-bottom:14px">';
+            html += '<div style="font-weight:600;margin-bottom:10px">本地模型</div>';
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">推理端点</label>'
+                 +  '<input style="' + mono + '" value="' + ((d.localBaseUrl || '') + '') + '" readonly></div>';
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">内置模型</label>'
+                 +  '<input style="' + mono + '" value="' + ((d.localModel || '') + '') + '" readonly></div>';
+            html += '<div id="localStatus" style="margin:10px 0;font-size:13px;line-height:1.7">'
+                 +  self.localStatusText(st) + '</div>';
+            html += '<button class="btn" style="margin-right:8px" onclick="App.downloadLocalModel()">下载模型</button>';
+            html += '<button class="btn" style="margin-right:8px" onclick="App.loadLocalModel()">立即加载模型</button>';
+            html += '<button class="btn" style="margin-right:8px" onclick="App.warmUpModel()">预热提示词</button>';
+            html += '<button class="btn" onclick="App.unloadLocalModel()">卸载模型（释放显存）</button>';
+            html += '<div id="warmupStatus" style="margin-top:8px;font-size:12px;color:#6a6a80"></div>';
+            html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80">'
+                 +  '权重不随安装包分发：安装目录里还没有模型文件时，<b>点「下载模型」或直接发第一条消息</b>'
+                 +  '都会自动从 ModelScope 拉取（约 8.9GB，只下一次）。<br>'
+                 +  '不用手动点：软件启动时不会加载模型，你发出第一条消息时才自动加载。'
+                 +  '如果用自定义 API，本地模型永远不会被加载。<br>'
+                 +  '<b>纯 CPU 推理时建议点一次「预热提示词」</b>：它会把系统提示词和工具定义'
+                 +  '的前缀缓存提前算好，这样你的第一条消息不用等预填充（顺便实测出预填充速度）。</div>';
+            html += '</div>';
+
+            // ---- 自定义 API ----
+            // 刻意不预设任何厂商：不填模板、不举例厂商名、不预置默认值，
+            // 就是三个空输入框，URL / Key / 模型名全部由用户自己填。
+            //
+            // 表单要读 customApi 存档（而不是当前生效的端点）：
+            // 切到本地模式后当前端点会变成内置运行时，如果这时表单也跟着清空，
+            // 用户切回自定义 API 就得把地址和 Key 重新敲一遍 —— 看起来就是"点不回去"。
+            var saved = d.customApi || {};
+            var cUrl   = (mode === 'custom') ? (d.baseUrl || '') : (saved.baseUrl || '');
+            var cKey   = (mode === 'custom') ? (d.apiKey || '')  : (saved.apiKey || '');
+            var cModel = (mode === 'custom') ? (d.model || '')   : (saved.model || '');
+            var hasSaved = !!(saved.baseUrl || saved.model);
+
+            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px">';
+            html += '<div style="font-weight:600;margin-bottom:10px">自定义 API</div>';
+            if (hasSaved && mode !== 'custom') {
+                html += '<div style="margin-bottom:10px;font-size:12px;color:#00b894">'
+                     +  '✓ 已保存过一份配置，点「自定义 API」会直接切回去，不用重填</div>';
             }
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">接口地址（Base URL）</label>'
+                 +  '<input id="cfgCustomUrl" style="' + mono + '" placeholder="https://..." value="'
+                 +  self.escapeHtml(cUrl) + '"></div>';
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">API Key</label>'
+                 +  '<input id="cfgCustomKey" type="password" style="' + mono + '" placeholder="在这里粘贴你的 Key" value="'
+                 +  self.escapeHtml(cKey) + '"></div>';
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">模型名称</label>'
+                 +  '<input id="cfgCustomModel" style="' + mono + '" placeholder="填服务商给出的模型 ID" value="'
+                 +  self.escapeHtml(cModel) + '"></div>';
+            html += '<div id="customStatus" style="margin:10px 0;font-size:13px;color:#a0a0b8"></div>';
+            html += '<button class="btn btn-primary" onclick="App.saveCustomApi()">保存并启用</button>';
+            html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80;line-height:1.8">'
+                 +  '· 地址要填到版本号那一层，通常是 <span style="font-family:monospace">…/v1</span><br>'
+                 +  '· 只要兼容 OpenAI 的 <span style="font-family:monospace">/chat/completions</span> 调用格式就能用，不限服务商<br>'
+                 +  '· Key 只存在本机（用户目录下的 .lioncode/app-config.json），不会上传到任何地方<br>'
+                 +  '· 切到本地模型不会清掉这里的内容，随时可以切回来</div>';
+            html += '</div>';
+
+            // ---- 工具调用方式（两种格式都支持，这里只是选"首选哪个"）----
+            var tcm = d.toolCallMode || 'auto';
+            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px;margin-top:14px">';
+            html += '<div style="font-weight:600;margin-bottom:10px">工具调用方式</div>';
+            html += '<div style="margin-bottom:8px"><label style="' + lbl + '">首选格式</label>'
+                 +  '<select id="cfgToolCallMode" onchange="App.saveToolCallMode()" style="' + inp + '">'
+                 +  '<option value="auto"'   + (tcm === 'auto'   ? ' selected' : '') + '>自动（推荐）—— 云端走原生 function calling，本地模型走向文本格式</option>'
+                 +  '<option value="native"' + (tcm === 'native' ? ' selected' : '') + '>原生 function calling —— 下发 tools 定义，走 API 工具通道</option>'
+                 +  '<option value="text"'   + (tcm === 'text'   ? ' selected' : '') + '>仅文本 —— 不发 tools，用提示词里的 &lt;tool_call&gt; 格式</option>'
+                 +  '</select></div>';
+            html += '<div id="toolCallModeStatus" style="margin:6px 0 10px;font-size:13px;color:#a0a0b8"></div>';
+            html += '<div style="font-size:12px;color:#6a6a80;line-height:1.8">'
+                 +  '· 两种格式<b>都能识别</b>：模型用原生 tool_calls 回、还是用文本 '
+                 +  '<span style="font-family:monospace">&lt;tool_call&gt;</span> 回，系统都认，这里选的只是"让模型优先用哪种"<br>'
+                 +  '· 本地模型是按住文本格式微调的，而且本地运行时没开工具模板，所以默认走文本<br>'
+                 +  '· 云端 API 走原生更稳（结构化返回、不用解析文本），默认就这样<br>'
+                 +  '· 接口不认 tools 或工具配套参数时会自动降级重试，不用手动切换</div>';
+            html += '</div>';
+
+            document.getElementById('settingsContent').innerHTML = html;
+        });
+    },
+
+    /** 把本地运行时状态渲染成一行中文 */
+    localStatusText: function(st) {
+        st = st || {};
+        if (!st.runtimeInstalled) {
+            return '<span style="color:#e17055">✗ 找不到模型运行时（runtime-vulkan\\llama-server.exe）</span>';
+        }
+        if (!st.modelInstalled) {
+            return '<span style="color:#e17055">✗ 找不到模型文件 ' + (st.modelFile || '') + '</span>';
+        }
+        if (st.running) {
+            return '<span style="color:#00b894">✓ 模型已加载，正在服务</span>'
+                 + '<span style="color:#6a6a80"> （' + (st.host || '') + ':' + (st.port || '') + '）</span>';
+        }
+        if (st.starting) {
+            return '<span style="color:#fdcb6e">⏳ 正在加载模型…</span>'
+                 + '<span style="color:#6a6a80"> 8.9GB 首次加载约 30~90 秒</span>';
+        }
+        if (st.lastError) {
+            return '<span style="color:#e17055">✗ 上次启动失败：' + st.lastError + '</span>';
+        }
+        return '<span style="color:#a0a0b8">○ 模型未加载（发出第一条消息时自动加载）</span>';
+    },
+
+    /** 切换运行方式 */
+    setRuntimeMode: function(mode) {
+        var self = this;
+        if (mode === 'custom') {
+            // 先看表单里有没有值；没有就把存档读回来填上（表单在本地模式下是空的时候才会这样）
+            var box = document.getElementById('customStatus');
+            var url = (document.getElementById('cfgCustomUrl') || {}).value || '';
+            var key = (document.getElementById('cfgCustomKey') || {}).value || '';
+            var mdl = (document.getElementById('cfgCustomModel') || {}).value || '';
+            if (url.trim() && mdl.trim()) {
+                self.saveCustomApi();
+                return;
+            }
+            // 表单本身也空 —— 让后端从存档里取，取不到会明确报错
+            fetch('/api/runtime/mode', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({mode: 'custom', baseUrl: url.trim(),
+                                      apiKey: key.trim(), model: mdl.trim()})
+            }).then(function(r) { return r.json(); }).then(function(res) {
+                if (!res.success) {
+                    if (box) {
+                        box.style.color = '#e17055';
+                        box.textContent = '✗ ' + (res.error || '切换失败') + '（请在下面填好三项再点）';
+                    }
+                    return;
+                }
+                App.fillModels([{modelId: res.data.model, modelName: res.data.model}]);
+                App.renderProvidersTab();
+                App.refreshRuntimeBanner();
+            });
+            return;
+        }
+        fetch('/api/runtime/mode', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mode: 'local'})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!res.success) { alert(res.error || '切换失败'); return; }
+            App.renderProvidersTab();
+            App.refreshRuntimeBanner();
+        });
+    },
+
+    /** 保存自定义 API 并切过去 */
+    saveCustomApi: function() {
+        var box = document.getElementById('customStatus');
+        var baseUrl = (document.getElementById('cfgCustomUrl') || {}).value || '';
+        var apiKey  = (document.getElementById('cfgCustomKey') || {}).value || '';
+        var model   = (document.getElementById('cfgCustomModel') || {}).value || '';
+        if (!baseUrl.trim()) { box.style.color = '#e17055'; box.textContent = '请填写 Base URL'; return; }
+        if (!model.trim())   { box.style.color = '#e17055'; box.textContent = '请填写模型名称'; return; }
+        box.style.color = '#a0a0b8';
+        box.textContent = '正在保存并测试连接…';
+        fetch('/api/runtime/mode', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mode: 'custom', baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim()})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!res.success) { box.style.color = '#e17055'; box.textContent = '✗ ' + (res.error || '保存失败'); return; }
+            box.style.color = '#00b894';
+            box.textContent = '✓ 已启用自定义 API';
+            App.fillModels([{id: model.trim(), name: model.trim()}]);
+            App.renderProvidersTab();
+            App.refreshRuntimeBanner();
+        }).catch(function(e) {
+            box.style.color = '#e17055'; box.textContent = '✗ 保存失败: ' + e;
+        });
+    },
+
+    /** 保存工具调用方式（auto / native / text） */
+    saveToolCallMode: function() {
+        var sel = document.getElementById('cfgToolCallMode');
+        var box = document.getElementById('toolCallModeStatus');
+        if (!sel) { return; }
+        var mode = sel.value;
+        box.style.color = '#a0a0b8';
+        box.textContent = '正在保存…';
+        fetch('/api/runtime/tool-call-mode', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mode: mode})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!res || !res.success) {
+                box.style.color = '#e17055';
+                box.textContent = '✗ ' + ((res && res.error) || '保存失败');
+                return;
+            }
+            box.style.color = '#00b894';
+            box.textContent = '✓ 已保存：' + ({
+                auto:   '自动（云端原生 / 本地文本）',
+                native: '原生 function calling',
+                text:   '仅文本 <tool_call>'
+            }[mode] || mode) + '（下一条消息生效）';
+        }).catch(function(e) {
+            box.style.color = '#e17055';
+            box.textContent = '✗ 保存失败: ' + e;
+        });
+    },
+
+    /** 预热：把系统提示词 + 工具定义的前缀缓存提前算好（纯 CPU 推理时很关键） */
+    warmUpModel: function() {
+        var box = document.getElementById('warmupStatus');
+        if (box) { box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在预热（首次会把模型也拉起来）…</span>'; }
+        fetch('/api/runtime/warmup', {method:'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                var d = (res && res.data) || {};
+                if (!box) { return; }
+                if (!d.warmed) {
+                    box.innerHTML = '<span style="color:#e17055">未预热：' + (d.reason || '未知') + '</span>';
+                    return;
+                }
+                box.innerHTML = '<span style="color:#00b894">✓ 预热完成</span>'
+                    + '<span style="color:#6a6a80">　前缀 ' + d.promptTokens + ' token，'
+                    + '耗时 ' + d.seconds + ' 秒 → <b>' + d.tokensPerSecond + ' tok/s</b> 预填充速度'
+                    + '（含工具定义 ' + d.toolDefinitions + ' 个）</span>';
+            })
+            .catch(function(e) {
+                if (box) { box.innerHTML = '<span style="color:#e17055">✗ 预热失败: ' + e + '</span>'; }
+            });
+    },
+
+    /** 手动加载本地模型 */
+    /**
+     * 只下载权重、不加载模型（不占显存）。
+     * 权重不随安装包分发，首次用到时后端会自动下；这个按钮是给"想先下好"的人用的。
+     */
+    downloadLocalModel: function() {
+        var box = document.getElementById('localStatus');
+        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在从 ModelScope 下载权重…'
+                      + '（约 8.9GB，只下一次；进度见 logs/lion-code.log）</span>';
+        fetch('/api/runtime/local/download', {method:'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                var st = (res && res.data) || {};
+                if (st.modelInstalled) {
+                    box.innerHTML = '<span style="color:#00b894">✓ 权重已下载完成</span>'
+                                  + App.localStatusText(st);
+                } else {
+                    box.innerHTML = App.localStatusText(st);
+                }
+                if (res && res.success) { App.loadModels(); }
+            })
+            .catch(function(e) {
+                box.innerHTML = '<span style="color:#e17055">✗ 下载失败: ' + e + '</span>';
+            });
+    },
+
+    loadLocalModel: function() {
+        var box = document.getElementById('localStatus');
+        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在加载模型…（8.9GB，约 30~90 秒）</span>';
+        fetch('/api/runtime/local/start', {method:'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                box.innerHTML = App.localStatusText((res && res.data) || {});
+                if (res && res.success) { App.refreshRuntimeBanner(); App.loadModels(); }
+            })
+            .catch(function(e) {
+                box.innerHTML = '<span style="color:#e17055">✗ 加载失败: ' + e + '</span>';
+            });
+    },
+
+    /** 手动卸载本地模型 */
+    unloadLocalModel: function() {
+        fetch('/api/runtime/local/stop', {method:'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                var box = document.getElementById('localStatus');
+                if (box) box.innerHTML = App.localStatusText((res && res.data) || {});
+                App.refreshRuntimeBanner();
+            });
+    },
+
+    /** 顶部提示条：当前用的是本地模型还是自定义 API */
+    refreshRuntimeBanner: function() {
+        fetch('/api/runtime/mode').then(function(r) { return r.json(); }).then(function(res) {
+            if (!res || !res.success) return;
+            var d = res.data || {};
+            var el = document.getElementById('runtimeBanner');
+            if (!el) return;
+            if (d.mode === 'custom') {
+                el.innerHTML = '<span style="color:#74b9ff">●</span> 自定义 API：'
+                             + '<span style="font-family:monospace">' + (d.model || '') + '</span>'
+                             + ' <span style="color:#6a6a80">切换 ▾</span>';
+                el.title = (d.baseUrl || '') + '（点击切换模型来源）';
+            } else {
+                var st = d.localStatus || {};
+                var dot = st.running ? '<span style="color:#00b894">●</span>'
+                                     : '<span style="color:#6a6a80">○</span>';
+                var txt = st.running ? '已加载' : '未加载';
+                el.innerHTML = dot + ' 本地模型：' + (d.model || '')
+                             + ' <span style="color:#6a6a80">' + txt + ' · 切换 ▾</span>';
+                el.title = (d.baseUrl || '') + '（点击切换模型来源）';
+            }
+        });
+    },
+
+    checkBoxModel: function() {
+        // 兼容旧按钮：直接看本地运行时状态
+        var box = document.getElementById('cfgLocalStatus') || document.getElementById('localStatus');
+        if (!box) return;
+        box.textContent = '正在检测…';
+        fetch('/api/runtime/local').then(function(r) { return r.json(); }).then(function(res) {
+            box.innerHTML = App.localStatusText((res && res.data) || {});
         });
     },
 
@@ -844,67 +1446,8 @@ var App = {
         }).catch(function() { alert('保存失败'); });
     },
 
-    onProviderChange: function() {
-        var sel = document.getElementById('cfgProvider');
-        var opt = sel.options[sel.selectedIndex];
-        if (!sel.value) { document.getElementById('cfgDetails').style.display = 'none'; return; }
-        document.getElementById('cfgDetails').style.display = 'block';
-        document.getElementById('cfgUrl').value = opt.getAttribute('data-url') || '';
-        var tp = opt.getAttribute('data-tp') === 'true';
-        document.getElementById('cfgTpBtn').style.display = tp ? 'block' : 'none';
-    },
-
-    saveProvider: function() {
-        var sel = document.getElementById('cfgProvider');
-        var key = document.getElementById('cfgKey').value;
-        var url = document.getElementById('cfgUrl').value;
-        if (!sel.value || !key) { alert('请选择服务商并输入API Key'); return; }
-        
-        var opt = sel.options[sel.selectedIndex];
-        var protocolType = opt.getAttribute('data-proto') || 'openai';
-        var adapterType = protocolType === 'anthropic' ? 'ANTHROPIC' : 'OPENAI_COMPATIBLE';
-        var self = this;
-        // 1. 保存提供商配置（持久化）
-        fetch('/api/providers/configure', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-                providerId: sel.value,
-                apiKey: key,
-                useTokenPlan: !!self.useTokenPlan,
-                customBaseUrl: url
-            })
-        }).then(function(r) { return r.json(); })
-          .then(function(result) {
-            if (!result.success) { alert(result.error); return; }
-            // 2. 同步配置到对应适配器并激活（持久化）
-            return fetch('/api/chat/adapter/config', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({baseUrl: url, apiKey: key, adapterType: adapterType})
-            }).then(function(r) { return r.json(); });
-          })
-          .then(function(result) {
-            // 3. 拉取模型列表
-            return fetch('/api/providers/' + sel.value + '/models', {method:'POST'})
-                .then(function(r) { return r.json(); });
-          })
-          .then(function(result) {
-            self.closeModal();
-            if (result && result.success && result.data && result.data.models && result.data.models.length > 0) {
-                self.fillModels(result.data.models);
-                alert('配置已保存，已加载 ' + result.data.models.length + ' 个模型');
-            } else {
-                self.fillDefaultModels(sel.value);
-                alert('已保存配置（使用默认模型列表）');
-            }
-          })
-          .catch(function(e) {
-            self.fillDefaultModels(sel.value);
-            self.closeModal();
-            alert('已保存配置（使用默认模型列表）');
-          });
-    },
+    // 盒子版：不再有“选择服务商 / 填 API Key / Token-Plan”流程。
+    // 模型来源固定为 LionBox 本地端点，检测入口见 checkBoxModel()。
 
     fillModels: function(models) {
         var sel = document.getElementById('modelSelect');
@@ -922,18 +1465,9 @@ var App = {
         }
     },
 
+    // 盒子只内置一个模型；保留该函数仅为兜底，不再含任何云厂商列表
     fillDefaultModels: function(providerId) {
-        var defaults = {
-            'deepseek': [{id:'deepseek-v4-flash',name:'DeepSeek V4 Flash'},{id:'deepseek-v4-pro',name:'DeepSeek V4 Pro'}],
-            'xiaomi-mimo': [{id:'mimo-v2.5',name:'MiMo v2.5'},{id:'mimo-v2.5-pro',name:'MiMo v2.5 Pro'}],
-            'openai': [{id:'gpt-4o',name:'GPT-4o'},{id:'gpt-4o-mini',name:'GPT-4o Mini'}],
-            'zhipu': [{id:'glm-4',name:'GLM-4'},{id:'glm-4-flash',name:'GLM-4 Flash'}],
-            'moonshot': [{id:'moonshot-v1-8k',name:'Moonshot v1 8K'},{id:'moonshot-v1-32k',name:'Moonshot v1 32K'}],
-            'siliconflow': [{id:'Qwen/Qwen2.5-7B-Instruct',name:'Qwen2.5 7B'}],
-            'anthropic': [{id:'claude-sonnet-4-20250514',name:'Claude Sonnet 4'},{id:'claude-3-5-haiku-20241022',name:'Claude 3.5 Haiku'}]
-        };
-        var models = defaults[providerId] || [{id:'default',name:'默认模型'}];
-        this.fillModels(models.map(function(m) { return {modelId:m.id, modelName:m.name}; }));
+        this.fillModels([{modelId:'MiMo-V2.6-Distill-Qwen-9B', modelName:'MiMo-V2.6-Distill-Qwen-9B'}]);
     },
 
     onModelChange: function() {
@@ -942,18 +1476,9 @@ var App = {
         var tl = document.getElementById('thinkingLevel');
         if (!modelId) { tl.disabled = true; tl.innerHTML = '<option>选择模型后加载</option>'; return; }
 
-        // 根据模型名判断思考等级
+        // 盒子本地模型不支持思考等级（GGUF 运行时无 reasoning effort 参数）
         var levels = [];
         var lower = modelId.toLowerCase();
-        if (lower.includes('reasoner') || lower.includes('r1') || lower.includes('deepseek')) {
-            levels = [{code:'LOW',name:'快速',default:false},{code:'MEDIUM',name:'标准',default:true},{code:'HIGH',name:'深度',default:false},{code:'MAX',name:'最强',default:false}];
-        } else if (lower.includes('claude') && (lower.includes('4') || lower.includes('3.5') || lower.includes('3-5'))) {
-            levels = [{code:'LOW',name:'快速',default:false},{code:'MEDIUM',name:'标准',default:true},{code:'HIGH',name:'扩展',default:false}];
-        } else if (lower.includes('mimo')) {
-            levels = [{code:'LOW',name:'快速',default:false},{code:'MEDIUM',name:'标准',default:true},{code:'HIGH',name:'深度',default:false}];
-        } else if (lower.includes('gemini') && lower.includes('pro')) {
-            levels = [{code:'LOW',name:'快速',default:false},{code:'MEDIUM',name:'标准',default:true},{code:'HIGH',name:'深度',default:false}];
-        }
 
         if (levels.length === 0) {
             tl.disabled = true;
@@ -984,25 +1509,6 @@ var App = {
                 thinkingLevel: tl.disabled ? '' : tl.value
             })
         }).catch(function() {});
-    },
-
-    switchEndpoint: function(type) {
-        var std = document.getElementById('epStandard');
-        var tp = document.getElementById('epTokenPlan');
-        if (type === 'standard') {
-            std.classList.add('active'); std.style.background = '#6c5ce7'; std.style.color = 'white';
-            tp.classList.remove('active'); tp.style.background = ''; tp.style.color = '';
-            this.useTokenPlan = false;
-        } else {
-            tp.classList.add('active'); tp.style.background = '#6c5ce7'; tp.style.color = 'white';
-            std.classList.remove('active'); std.style.background = ''; std.style.color = '';
-            this.useTokenPlan = true;
-        }
-        // 更新Base URL（Token-Plan使用专属端点）
-        var sel = document.getElementById('cfgProvider');
-        var opt = sel.options[sel.selectedIndex];
-        var url = (type === 'tokenplan' ? opt.getAttribute('data-tpurl') : opt.getAttribute('data-url')) || '';
-        document.getElementById('cfgUrl').value = url;
     },
 
     // ====== 模态框 ======

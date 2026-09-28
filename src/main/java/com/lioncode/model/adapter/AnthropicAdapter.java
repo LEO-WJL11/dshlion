@@ -19,18 +19,21 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Anthropic Claude原生接口适配器
+ * 消息协议适配器（Messages API格式）
  * 
- * 使用Anthropic Messages API格式：
+ * 使用 Messages API 格式：
  * - POST /v1/messages
  * - x-api-key认证
- * - anthropic-version头
+ * - 版本头
  * - 不同于OpenAI的消息格式
+ * 
+ * 盒子说明：出厂只提供本地模型运行时（OpenAI兼容协议），
+ * 此适配器不预设任何外部端点、不内置任何云端模型清单，
+ * 必须由盒子显式配置端点后才可用。
  * 
  * 特性：
  * - 同步/流式调用
  * - 工具调用（tool_use）
- * - 思考等级（thinking参数）
  * - 自动获取模型列表
  */
 @Component
@@ -41,7 +44,8 @@ public class AnthropicAdapter implements ModelAdapter {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final String ANTHROPIC_VERSION = "2023-06-01";
 
-    private String baseUrl = "https://api.anthropic.com";
+    /** 盒子场景不预设任何外部端点：必须显式配置才可用 */
+    private String baseUrl = "";
     private String apiKey = "";
     private final OkHttpClient httpClient;
 
@@ -195,41 +199,9 @@ public class AnthropicAdapter implements ModelAdapter {
 
     @Override
     public List<ModelInfo> getAvailableModels() {
-        // Anthropic没有公开的/models端点，返回已知模型及其思考等级
-        return List.of(
-            // Claude Sonnet 4 - 支持扩展思考
-            new ModelInfo("claude-sonnet-4-20250514", "Claude Sonnet 4", "Anthropic",
-                true, true, ModelInfo.ModelSource.CLOUD_API, null, null,
-                List.of(
-                    new ModelInfo.ThinkingLevelOption("LOW", "快速", "快速响应，不启用思考", 1024, false),
-                    new ModelInfo.ThinkingLevelOption("MEDIUM", "标准", "标准思考模式", 4096, true),
-                    new ModelInfo.ThinkingLevelOption("HIGH", "扩展", "扩展思考，深度推理", 16384, false)
-                ), 200000, 8192),
-            
-            // Claude 3.5 Haiku - 不支持扩展思考
-            new ModelInfo("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Anthropic",
-                false, true, ModelInfo.ModelSource.CLOUD_API, null, null,
-                List.of(), 200000, 8192),
-            
-            // Claude 3 Opus - 支持扩展思考
-            new ModelInfo("claude-3-opus-20240229", "Claude 3 Opus", "Anthropic",
-                true, true, ModelInfo.ModelSource.CLOUD_API, null, null,
-                List.of(
-                    new ModelInfo.ThinkingLevelOption("LOW", "快速", "快速响应", 1024, false),
-                    new ModelInfo.ThinkingLevelOption("MEDIUM", "标准", "标准思考", 4096, true),
-                    new ModelInfo.ThinkingLevelOption("HIGH", "扩展", "扩展思考模式", 16384, false),
-                    new ModelInfo.ThinkingLevelOption("MAX", "最强", "最大思考深度", 32768, false)
-                ), 200000, 4096),
-            
-            // Claude 3.5 Sonnet - 支持扩展思考
-            new ModelInfo("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Anthropic",
-                true, true, ModelInfo.ModelSource.CLOUD_API, null, null,
-                List.of(
-                    new ModelInfo.ThinkingLevelOption("LOW", "快速", "快速响应", 1024, false),
-                    new ModelInfo.ThinkingLevelOption("MEDIUM", "标准", "标准思考", 4096, true),
-                    new ModelInfo.ThinkingLevelOption("HIGH", "扩展", "扩展思考模式", 16384, false)
-                ), 200000, 8192)
-        );
+        // 盒子出厂只内置本地模型：此适配器不内置任何云端模型清单，
+        // 避免UI或接口出现云端模型选项。
+        return List.of();
     }
 
     /**
@@ -314,15 +286,10 @@ public class AnthropicAdapter implements ModelAdapter {
 
     /**
      * 判断模型是否支持扩展思考
+     * 
+     * 盒子本地模型运行时使用OpenAI兼容协议，此适配器不参与思考等级协商。
      */
     private boolean supportsThinking(String modelId) {
-        if (modelId == null) return false;
-        String lower = modelId.toLowerCase();
-        // Claude 3.5 Sonnet及以上、Claude 3 Opus、Claude Sonnet 4支持扩展思考
-        if (lower.contains("claude-sonnet-4") || lower.contains("claude-4")) return true;
-        if (lower.contains("claude-3-opus")) return true;
-        if (lower.contains("claude-3-5-sonnet") || lower.contains("claude-3.5-sonnet")) return true;
-        // Claude 3.5 Haiku不支持扩展思考
         return false;
     }
 

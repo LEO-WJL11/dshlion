@@ -11,6 +11,7 @@ import com.lioncode.core.session.ConversationMessage;
 import com.lioncode.core.session.SessionManager;
 import com.lioncode.approval.ApprovalPolicy;
 import com.lioncode.model.adapter.*;
+import com.lioncode.core.sound.SoundNotifier;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -50,6 +51,8 @@ public class AgentLoop {
     private final SessionManager sessionManager;
     private final com.lioncode.core.workspace.WorkspaceManager workspaceManager;
     private final ApprovalPolicy approvalPolicy;
+    private final com.lioncode.core.sound.SoundNotifier soundNotifier;
+    private final com.lioncode.model.config.AppConfigStore configStore;
 
     /** 每个会话的系统提示词缓存 */
     private final Map<String, String> systemPromptCache = new ConcurrentHashMap<>();
@@ -58,7 +61,9 @@ public class AgentLoop {
                      ConversationHistory conversationHistory, AdapterManager adapterManager,
                      AgentControlManager agentControl, SessionManager sessionManager,
                      com.lioncode.core.workspace.WorkspaceManager workspaceManager,
-                     ApprovalPolicy approvalPolicy) {
+                     ApprovalPolicy approvalPolicy,
+                     com.lioncode.core.sound.SoundNotifier soundNotifier,
+                     com.lioncode.model.config.AppConfigStore configStore) {
         this.eventStore = eventStore;
         this.pluginRegistry = pluginRegistry;
         this.conversationHistory = conversationHistory;
@@ -67,6 +72,84 @@ public class AgentLoop {
         this.sessionManager = sessionManager;
         this.workspaceManager = workspaceManager;
         this.approvalPolicy = approvalPolicy;
+        this.soundNotifier = soundNotifier;
+        this.configStore = configStore;
+    }
+
+    /**
+     * 残缺工具调用 / 空响应的最大纠正次数。
+     * 有上限才不会因为模型反复吐残缺调用而把会话卡死；超了就按正常收尾处理。
+     */
+    private static final int MAX_CALL_REPAIR = 2;
+
+    /**
+     * 纠正提示词：针对「模型想做工具调用但调用残缺」和「整轮什么都没输出」两种失手。
+     *
+     * 这两种情况在旧版里都表现为「没有工具调用 + 正文为空」→ 直接当成最终答案返回，
+     * 用户看到一句空白回答，任务被静默结束（实测 MiMo 在提示词里看到文本格式示例时
+     * 就会返回 name=null、arguments="{}"、finish_reason=stop 的残缺调用）。
+     */
+    private String repairHint(boolean malformed) {
+        if (malformed) {
+            return "【系统提示】你上一次的工具调用是**残缺的**（缺少工具名，或 arguments 不是合法的 JSON），"
+                 + "因此没有被执行。请重新输出**一次完整**的工具调用：只调用一个工具，"
+                 + "工具名必须来自可用工具列表，arguments 必须是合法的 JSON 对象。";
+        }
+        return "【系统提示】你上一次没有输出任何内容（正文为空，也没有工具调用）。"
+             + "请直接给出结论，或者调用合适的工具继续推进任务。";
+    }
+
+    /**
+     * 预热计划：与真实请求**逐字节一致**的前缀（系统提示词 + 工具定义）。
+     *
+     * @param messages        消息体（系统提示词 + 一句占位用户消息）
+     * @param toolDefinitions 与真实请求同一份工具定义（顺序、序列化都必须一致，
+     *                        否则 llama-server 的前缀缓存命不中）
+     */
+    public record WarmupPlan(List<ChatMessage> messages,
+                             List<Map<String, Object>> toolDefinitions) {}
+
+    /**
+     * 构造预热请求，供 {@link com.lioncode.model.runtime.PrewarmService} 用。
+     *
+     * 关键点：系统提示词必须和真实请求一模一样，所以这里走的是**同一个
+     * buildSystemPrompt 和同一个 buildToolDefinitions**，不另写一份。
+     * 用户消息传空串 → 技能块不命中 → 与绝大多数真实请求的提示词一致。
+     */
+    public WarmupPlan buildWarmupPlan(AgentMode mode, String workspacePath) {
+        boolean nativeTools = useNativeTools();
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(ChatMessage.system(buildSystemPrompt(mode, workspacePath, "", nativeTools)));
+        messages.add(ChatMessage.user("预热"));
+        List<Map<String, Object>> tools = nativeTools ? buildToolDefinitions(mode) : List.of();
+        return new WarmupPlan(messages, tools);
+    }
+
+    /**
+     * 本轮是否走**原生 function calling**（把 tools 定义随请求下发）。     *
+     * 三种取值（设置里可切，默认 auto）：
+     *   auto   → 默认都走原生：云端 OpenAI 兼容 API 和随盒子的 llama-server 都支持。
+     *            llama-server 会按模型的 chat 模板把原生语法解析成标准 tool_calls；
+     *            实测不下发 tools 时模型会开始**编造工具**，所以本地也必须下发。
+     *   native → 强制下发 tools
+     *   text   → 强制不下发 tools，只靠系统提示词里的文本格式（给不认 tools 的端点兜底）
+     *
+     * 无论哪种方式，**两种格式的解析器都在**：模型用哪种回就认哪种。
+     */
+    private boolean useNativeTools() {
+        String mode = configStore == null
+            ? com.lioncode.model.config.AppConfigStore.TOOLCALL_AUTO
+            : configStore.toolCallMode();
+        com.lioncode.model.adapter.ModelAdapter adapter = adapterManager.getActiveAdapter();
+        // 端点刚刚拒过 tools：这一轮别再用原生通道了，否则会「工具被拒 + 提示词不教文本格式」双输
+        boolean rejected = adapter != null && adapter.toolDefinitionsRejected();
+        if (com.lioncode.model.config.AppConfigStore.TOOLCALL_TEXT.equals(mode)) {
+            return false;
+        }
+        if (com.lioncode.model.config.AppConfigStore.TOOLCALL_NATIVE.equals(mode)) {
+            return !rejected;
+        }
+        return adapter == null || (!adapter.prefersTextToolCalls() && !rejected);
     }
 
     /**
@@ -97,13 +180,16 @@ public class AgentLoop {
         // 3. 构建消息列表
         List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
 
-        // 3.5 构建工具定义列表
-        List<Map<String, Object>> toolDefinitions = buildToolDefinitions(mode);
-        log.info("可用工具数量: {}", toolDefinitions.size());
+        // 3.5 构建工具定义列表（仅原生 function calling 模式下随请求下发）
+        boolean nativeTools = useNativeTools();
+        List<Map<String, Object>> toolDefinitions = nativeTools ? buildToolDefinitions(mode) : List.of();
+        log.info("可用工具数量: {}（工具调用方式: {}）", toolDefinitions.size(),
+            nativeTools ? "原生 function calling" : "文本 <tool_call> 约定");
 
         // 4. 工具调用循环（无轮次上限，直到模型给出最终答案）
         ModelAdapter adapter = adapterManager.getActiveAdapter();
         int round = 0;
+        int repairs = 0;   // 残缺工具调用 / 空响应的纠正次数（有上限，防止死循环）
 
         while (true) {
             round++;
@@ -117,6 +203,7 @@ public class AgentLoop {
                 log.info(stopMsg + " 会话: {}", sessionId);
                 eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
                     Map.of("error", "手动停止"), "任务已手动停止");
+                soundNotifier.play(SoundNotifier.Kind.ERROR);   // 任务被中止：出错误提示音
                 conversationHistory.addMessage(ConversationMessage.assistant(sessionId, stopMsg));
                 return stopMsg;
             }
@@ -132,6 +219,7 @@ public class AgentLoop {
                 log.error("模型调用失败", e);
                 eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
                     Map.of("error", e.getMessage()), "模型调用失败: " + e.getMessage());
+                soundNotifier.play(SoundNotifier.Kind.ERROR);   // 模型调用失败：出错误提示音
                 return "模型调用失败: " + e.getMessage();
             }
 
@@ -143,6 +231,9 @@ public class AgentLoop {
             // 6. 如果没有工具调用，检查文本中是否有XML/JSON格式的工具调用
             List<ChatMessage.ToolCall> toolCalls = response.toolCalls();
             String responseContent = response.content() != null ? response.content() : "";
+            if (toolCalls != null && !toolCalls.isEmpty()) {
+                log.info("从响应中拿到 {} 个原生工具调用", toolCalls.size());
+            }
             
             if (toolCalls == null || toolCalls.isEmpty()) {
                 // 尝试从文本中解析工具调用（支持XML和JSON格式）
@@ -169,12 +260,29 @@ public class AgentLoop {
 
             // 7. 如果仍然没有工具调用，返回最终答案
             if (toolCalls.isEmpty()) {
+                // 7.1 先判断这是不是「模型想做工具调用但调用残缺」或者「整轮什么都没输出」。
+                //     这两种情况都不能当成正常收尾 —— 否则用户会收到一句空白回答、
+                //     任务被静默结束。纠正一次再试，最多 MAX_CALL_REPAIR 次。
+                boolean malformed = response.malformedToolCall();
+                if (repairs < MAX_CALL_REPAIR && (malformed || responseContent.isBlank())) {
+                    repairs++;
+                    log.warn("本轮没有可执行的工具调用（残缺={}, 正文长度={}），第 {} 次纠正重试 - 会话: {}",
+                        malformed, responseContent.length(), repairs, sessionId);
+                    eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+                        Map.of("malformed", malformed, "repair", repairs),
+                        malformed ? "残缺工具调用，已纠正重试" : "空响应，已纠正重试");
+                    conversationHistory.addMessage(ConversationMessage.system(sessionId, repairHint(malformed)));
+                    messages = buildMessages(sessionId, mode, userMessage);
+                    continue;
+                }
+
                 String finalAnswer = responseContent;
                 
                 // 保存助手消息
                 conversationHistory.addMessage(ConversationMessage.assistant(sessionId, finalAnswer));
                 
                 log.info("=== Agent主循环结束 === 共 {} 轮工具调用", round - 1);
+                soundNotifier.play(SoundNotifier.Kind.DONE);     // 任务完成：成功提示音
                 return finalAnswer;
             }
 
@@ -201,6 +309,7 @@ public class AgentLoop {
                     log.info(stopMsg + " 会话: {}", sessionId);
                     eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
                         Map.of("error", "手动停止"), "任务已手动停止");
+                    soundNotifier.play(SoundNotifier.Kind.ERROR);   // 任务被中止：出错误提示音
                     conversationHistory.addMessage(ConversationMessage.assistant(sessionId, stopMsg));
                     return stopMsg;
                 }
@@ -246,8 +355,9 @@ public class AgentLoop {
                 List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
                 ModelAdapter adapter = adapterManager.getActiveAdapter();
 
-                // 构建工具定义列表
-                List<Map<String, Object>> toolDefinitions = buildToolDefinitions(mode);
+                // 构建工具定义列表（仅原生 function calling 模式下随请求下发）
+                List<Map<String, Object>> toolDefinitions = useNativeTools()
+                    ? buildToolDefinitions(mode) : List.of();
 
                 // 流式调用模型
                 StringBuilder contentBuilder = new StringBuilder();
@@ -297,9 +407,34 @@ public class AgentLoop {
                             }
                             
                             if (toolCalls.isEmpty()) {
+                                // 先判断是不是「模型想做工具调用但调用残缺」或「整轮什么都没输出」。
+                                // 这两种都不能当成正常收尾（否则用户收到一句空白回答、任务被静默结束），
+                                // 纠正一次再试，最多 MAX_CALL_REPAIR 次。
+                                // 累积器非空 = 收到了 tool_calls 分片，但没能拼出可执行的调用。
+                                boolean malformed = !toolCallAccumulators.isEmpty();
+                                if (malformed || fullContent.isBlank()) {
+                                    // 这是首轮，纠正预算从 1 开始用（上限 MAX_CALL_REPAIR）
+                                    int next = 1;
+                                    log.warn("本轮没有可执行的工具调用（残缺={}, 正文长度={}），"
+                                        + "第 {} 次纠正重试 - 会话: {}",
+                                        malformed, fullContent.length(), next, sessionId);
+                                    eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+                                        Map.of("malformed", malformed, "repair", next),
+                                        malformed ? "残缺工具调用，已纠正重试" : "空响应，已纠正重试");
+                                    conversationHistory.addMessage(
+                                        ConversationMessage.system(sessionId, repairHint(malformed)));
+                                    sink.next(AgentChunk.text(malformed
+                                        ? "\n\n⚠ 上次的工具调用不完整，正在重试…\n\n"
+                                        : "\n\n⚠ 上次没有返回内容，正在重试…\n\n"));
+                                    List<ChatMessage> retryMessages = buildMessages(sessionId, mode, userMessage);
+                                    processStreamRound(sink, sessionId, retryMessages, model, thinkingLevel,
+                                        adapter, toolDefinitions, mode, userMessage, 1, next);
+                                    return;
+                                }
                                 // 没有工具调用，流结束
                                 conversationHistory.addMessage(ConversationMessage.assistant(sessionId, fullContent,
                                     reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null));
+                                soundNotifier.play(SoundNotifier.Kind.DONE);     // 任务完成：成功提示音
                                 sink.next(AgentChunk.done(fullContent));
                                 sink.complete();
                             } else {
@@ -352,16 +487,19 @@ public class AgentLoop {
                             }
                         } catch (Exception e) {
                             log.error("流式处理工具调用失败", e);
+                            soundNotifier.play(SoundNotifier.Kind.ERROR);   // 流式处理异常：出错误提示音
                             sink.error(e);
                         }
                     })
                     .doOnError(e -> {
                         log.error("流式调用失败", e);
+                        soundNotifier.play(SoundNotifier.Kind.ERROR);   // 模型流式调用失败：出错误提示音
                         sink.error(e);
                     })
                     .subscribe();
                     
             } catch (Exception e) {
+                soundNotifier.play(SoundNotifier.Kind.ERROR);   // 流式入口异常：出错误提示音
                 sink.error(e);
             }
         });
@@ -386,11 +524,26 @@ public class AgentLoop {
                                       ThinkingLevel thinkingLevel, ModelAdapter adapter,
                                       List<Map<String, Object>> toolDefinitions, AgentMode mode,
                                       String userMessage, int currentRound) {
+        processStreamRound(sink, sessionId, messages, model, thinkingLevel, adapter,
+            toolDefinitions, mode, userMessage, currentRound, 0);
+    }
+
+    /**
+     * 流式轮次（带纠正计数）
+     *
+     * @param repairRound 已经用掉的「残缺工具调用 / 空响应」纠正次数，上限 MAX_CALL_REPAIR
+     */
+    private void processStreamRound(reactor.core.publisher.FluxSink<AgentChunk> sink,
+                                      String sessionId, List<ChatMessage> messages, String model,
+                                      ThinkingLevel thinkingLevel, ModelAdapter adapter,
+                                      List<Map<String, Object>> toolDefinitions, AgentMode mode,
+                                      String userMessage, int currentRound, int repairRound) {
         // 控制检查：暂停时阻塞等待，停止时中止流
         try {
             agentControl.checkControl(sessionId);
         } catch (AgentControlManager.AgentStoppedException e) {
             log.info("流式任务已手动停止: {} (轮次 {})", sessionId, currentRound);
+            soundNotifier.play(SoundNotifier.Kind.ERROR);   // 流式任务被中止：出错误提示音
             sink.next(AgentChunk.error("⏹ 任务已手动停止"));
             sink.complete();
             return;
@@ -441,6 +594,7 @@ public class AgentLoop {
                         conversationHistory.addMessage(ConversationMessage.assistant(sessionId, fullContent,
                             reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null));
                         log.info("=== 流式Agent循环结束 === 共 {} 轮工具调用", currentRound);
+                        soundNotifier.play(SoundNotifier.Kind.DONE);     // 任务完成：成功提示音
                         sink.next(AgentChunk.done(fullContent));
                         sink.complete();
                     } else {
@@ -485,16 +639,19 @@ public class AgentLoop {
                         }
 
                         List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
+                        // 纠正计数原样带过去：整条用户消息共用一份纠正预算，防止反复重试
                         processStreamRound(sink, sessionId, nextMessages, model, thinkingLevel, 
-                            adapter, toolDefinitions, mode, userMessage, currentRound + 1);
+                            adapter, toolDefinitions, mode, userMessage, currentRound + 1, repairRound);
                     }
                 } catch (Exception e) {
                     log.error("流式处理工具调用失败 (轮次 {})", currentRound, e);
+                    soundNotifier.play(SoundNotifier.Kind.ERROR);   // 流式处理异常：出错误提示音
                     sink.error(e);
                 }
             })
             .doOnError(e -> {
                 log.error("流式调用失败 (轮次 {})", currentRound, e);
+                soundNotifier.play(SoundNotifier.Kind.ERROR);   // 模型流式调用失败：出错误提示音
                 sink.error(e);
             })
             .subscribe();
@@ -598,6 +755,7 @@ public class AgentLoop {
             eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
                 Map.of("toolName", toolName, "error", error, "approval", approval.action().name()),
                 "审批拦截: " + toolName);
+            soundNotifier.play(SoundNotifier.Kind.APPROVAL);   // 需要审批：提醒音
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
             return;
@@ -615,10 +773,12 @@ public class AgentLoop {
             return;
         }
 
-        // 执行工具（设置会话工作区上下文：相对路径基于绑定的工作区解析）
+        // 执行工具（设置上下文：相对路径基于绑定的工作区解析；
+        // 会话 ID 也一起放进去——ask_user 这类工具需要知道自己在哪个会话里）
         sessionManager.getSession(sessionId)
             .flatMap(s -> workspaceManager.getWorkspace(s.workspaceId()))
             .ifPresent(ws -> com.lioncode.core.workspace.WorkspaceContext.set(ws.path()));
+        com.lioncode.core.session.SessionContext.set(sessionId);
         try {
             ToolResult result = tool.execute(toolCall.arguments());
             
@@ -646,6 +806,7 @@ public class AgentLoop {
                     "工具执行异常: " + e.getMessage()));
         } finally {
             com.lioncode.core.workspace.WorkspaceContext.clear();
+            com.lioncode.core.session.SessionContext.clear();
         }
     }
 
@@ -684,7 +845,7 @@ public class AgentLoop {
             .orElse(null);
 
         // 系统提示词（含模式专属提示词与适用技能的能力提示词）
-        String systemPrompt = buildSystemPrompt(mode, workspacePath, userMessage);
+        String systemPrompt = buildSystemPrompt(mode, workspacePath, userMessage, useNativeTools());
         messages.add(ChatMessage.system(systemPrompt));
 
         // 对话历史
@@ -722,8 +883,13 @@ public class AgentLoop {
      * 
      * 核心策略：给出明确的工具调用指令和具体示例，
      * 让模型知道必须调用工具而非只给文字建议。
+     *
+     * @param nativeTools true = 本轮走原生 function calling（工具定义已随请求下发），
+     *                    提示词只把文本 &lt;tool_call&gt; 当兜底格式说明；
+     *                    false = 靠文本约定，完整描述 JSON/XML 两种格式与示例
      */
-    private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage) {
+    private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage,
+                                     boolean nativeTools) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是Lion-Code Agent，一个强大的AI编程助手。你的核心能力是通过调用工具来实际操作文件、执行命令、完成任务。\n\n");
 
@@ -743,9 +909,9 @@ public class AgentLoop {
         prompt.append("当用户请求涉及以下操作时，你**必须**调用相应工具来执行，**绝对不能**只给出文字描述或建议：\n");
         prompt.append("- 读取/写入/修改/删除文件 → 调用 read_file / write_file / modify_file / delete_file\n");
         prompt.append("- 执行命令（编译、运行、安装等）→ 调用 execute_command\n");
-        prompt.append("- 查看目录/搜索文件 → 调用 list_files / search_files / glob_files\n");
+        prompt.append("- 查看目录/搜索文件 → 调用 list_directory / search_in_files / glob_files\n");
         prompt.append("- Git操作 → 调用 git_status / git_commit / git_diff 等\n");
-        prompt.append("- 查看系统信息 → 调用 system_info / env_var / working_dir\n\n");
+        prompt.append("- 查看系统信息 → 调用 system_info / get_env / working_directory\n\n");
 
         // 添加可用工具描述
         List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
@@ -755,20 +921,35 @@ public class AgentLoop {
                 prompt.append("- **").append(tool.getName()).append("**: ").append(tool.getDescription()).append("\n");
             }
             prompt.append("\n### 工具调用格式\n\n");
+            if (nativeTools) {
+                // 原生 function calling：工具定义已随请求下发，让模型走 API 的工具通道。
+                //
+                // 【千万别在这里放文本格式的代码块示例】—— 实测 MiMo 会因此把两种机制
+                // 混在一起，返回一个残缺的原生调用（name=null、arguments="{}"、
+                // finish_reason=stop），工具直接跑不起来。去掉示例后同一请求立刻正常。
+                // 所以这里只做一句"系统也认文本格式"的说明，不给范例。
+                prompt.append("请**直接使用原生工具调用（function calling）**：\n");
+                prompt.append("本次请求已随消息下发了完整的工具定义（tools），");
+                prompt.append("把你的调用放在 tool_calls 里返回，**不要**把工具调用写成正文文字。\n\n");
+                prompt.append("若接口不支持原生调用，系统同样能识别文本形式的工具调用。\n\n");
+                prompt.append("**重要**：\n");
+                prompt.append("1. 【强制规则】一次只能调用一个工具，绝对不要在一次响应中返回多个工具调用；必须等待工具结果返回后再决定下一步\n");
+                prompt.append("2. arguments 必须是合法的 JSON 对象，参数名必须来自工具定义里的 parameters，不要自己发明\n");
+            } else {
             prompt.append("你**必须**使用以下两种格式之一来调用工具：\n\n");
             
-            prompt.append("#### 格式一：XML格式（推荐）\n\n");
+            prompt.append("#### 格式一：JSON格式（推荐）\n\n");
+            prompt.append("```json\n");
+            prompt.append("<tool_call>\n");
+            prompt.append("{\"name\": \"工具名称\", \"arguments\": {\"参数名\": \"参数值\"}}\n");
+            prompt.append("</tool_call>\n");
+            prompt.append("```\n\n");
+
+            prompt.append("#### 格式二：XML格式（备选）\n\n");
             prompt.append("```xml\n");
             prompt.append("<tool_call>\n");
             prompt.append("  <name>工具名称</name>\n");
             prompt.append("  <arguments>{\"参数名\": \"参数值\"}</arguments>\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            prompt.append("#### 格式二：JSON格式\n\n");
-            prompt.append("```json\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("{\"name\": \"工具名称\", \"arguments\": {\"参数名\": \"参数值\"}}\n");
             prompt.append("</tool_call>\n");
             prompt.append("```\n\n");
 
@@ -809,6 +990,7 @@ public class AgentLoop {
             prompt.append("2. 工具调用必须放在代码块中（```xml 或 ```json）\n");
             prompt.append("3. arguments必须是合法的JSON字符串\n");
             prompt.append("4. 不要在工具调用前后添加多余文字，直接给出调用即可\n");
+            }
         }
 
         return prompt.toString();
@@ -1060,6 +1242,29 @@ public class AgentLoop {
                 
                 String id = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
                 toolCalls.add(new ChatMessage.ToolCall(id, name, arguments));
+            }
+        }
+
+        // 宽容兜底：模型漏写 <tool_call> 包裹，直接给 <name>..</name><arguments>{..}</arguments>。
+        // 实测云端模型（MiMo）在文本模式下就会这么吐，不认的话整轮工具调用直接丢掉。
+        // 这个模式在正常正文里几乎不可能出现，误判风险很低。
+        if (toolCalls.isEmpty()) {
+            Pattern loosePattern = Pattern.compile(
+                "(?s)<name>\\s*([A-Za-z_][\\w.\\-]*)\\s*</name>\\s*"
+                + "<arguments>\\s*(\\{.*?\\}|\\[.*?\\])\\s*</arguments>");
+            Matcher looseMatcher = loosePattern.matcher(text);
+            while (looseMatcher.find()) {
+                String name = looseMatcher.group(1).trim();
+                String argsStr = looseMatcher.group(2).trim();
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> parsed = objectMapper.readValue(argsStr, Map.class);
+                    String id = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+                    toolCalls.add(new ChatMessage.ToolCall(id, name, parsed));
+                    log.info("解析到未包裹 <tool_call> 的 XML 工具调用: {} {}", name, argsStr);
+                } catch (Exception e) {
+                    log.debug("宽松XML工具调用参数解析失败: {} {}", name, argsStr);
+                }
             }
         }
 

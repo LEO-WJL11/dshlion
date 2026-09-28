@@ -41,13 +41,16 @@ public class SessionController {
     public ApiResponse<List<SessionDto>> getAllSessions() {
         List<SessionDto> dtos = sessionManager.getAllSessions().stream()
             .map(s -> new SessionDto(s.sessionId(), s.workspaceId(),
-                sessionManager.getEffectiveMode(s.sessionId()).getCode(), s.createdAt(), null))
+                sessionManager.getEffectiveMode(s.sessionId()).getCode(), s.createdAt(), null, s.name()))
             .toList();
         return ApiResponse.ok(dtos);
     }
 
     /**
      * 创建新会话
+     *
+     * 注意：这里**不生成**会话名。名字等用户在这个会话里发出第一条消息后，
+     * 由 SessionTitleService 拿这条消息的内容让模型生成（见 ChatController）。
      */
     @PostMapping
     public ApiResponse<SessionDto> createSession(@RequestBody CreateSessionRequest request) {
@@ -57,11 +60,28 @@ public class SessionController {
             // 持久化会话元数据，重启后自动恢复
             sessionPersistence.saveSession(session);
             SessionDto dto = new SessionDto(session.sessionId(), session.workspaceId(),
-                session.mode().getCode(), session.createdAt(), null);
+                session.mode().getCode(), session.createdAt(), null, session.name());
             return ApiResponse.ok("会话创建成功", dto);
         } catch (IllegalStateException e) {
             return ApiResponse.error(e.getMessage());
         }
+    }
+
+    /**
+     * 重命名会话（用户手动修改；模型自动命名也走 SessionManager 那条路）
+     */
+    @PutMapping("/{sessionId}/name")
+    public ApiResponse<String> renameSession(@PathVariable("sessionId") String sessionId,
+                                             @RequestBody RenameSessionRequest request) {
+        if (sessionManager.getSession(sessionId).isEmpty()) {
+            return ApiResponse.error("会话不存在: " + sessionId);
+        }
+        boolean ok = sessionManager.renameSession(sessionId, request.name());
+        if (!ok) {
+            return ApiResponse.error("重命名失败");
+        }
+        return ApiResponse.ok("已重命名",
+            sessionManager.getSession(sessionId).map(SessionManager.Session::name).orElse(null));
     }
 
     /**
@@ -92,7 +112,7 @@ public class SessionController {
                 // 用新模式重建元数据并持久化
                 sessionManager.getSession(sessionId).ifPresent(s ->
                     sessionPersistence.saveSession(new SessionManager.Session(
-                        s.sessionId(), s.workspaceId(), mode, s.createdAt())));
+                        s.sessionId(), s.workspaceId(), mode, s.createdAt(), s.name())));
                 return ApiResponse.ok("模式已切换", mode.getCode());
             }
             return ApiResponse.error("模式切换失败");
@@ -121,4 +141,9 @@ public class SessionController {
      * 切换模式请求
      */
     public record UpdateModeRequest(String mode) {}
+
+    /**
+     * 重命名会话请求
+     */
+    public record RenameSessionRequest(String name) {}
 }
