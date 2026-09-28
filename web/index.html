@@ -1365,7 +1365,10 @@ var App = {
                 } else {
                     box.innerHTML = App.localStatusText(st);
                 }
-                if (res && res.success) { App.loadModels(); }
+                // 注意：这里原来调的是 App.loadModels()，而那个函数根本不存在 ——
+                // 异常会被下面的 catch 捕获，于是界面显示"✗ 下载失败: TypeError: ..."，
+                // 明明下载成功了却报失败。刷新模型下拉用的是 fillModelsFromConfig()。
+                if (res && res.success) { App.fillModelsFromConfig(); }
             })
             .catch(function(e) {
                 box.innerHTML = '<span style="color:#e17055">✗ 下载失败: ' + e + '</span>';
@@ -1379,7 +1382,7 @@ var App = {
             .then(function(r) { return r.json(); })
             .then(function(res) {
                 box.innerHTML = App.localStatusText((res && res.data) || {});
-                if (res && res.success) { App.refreshRuntimeBanner(); App.loadModels(); }
+                if (res && res.success) { App.refreshRuntimeBanner(); App.fillModelsFromConfig(); }
             })
             .catch(function(e) {
                 box.innerHTML = '<span style="color:#e17055">✗ 加载失败: ' + e + '</span>';
