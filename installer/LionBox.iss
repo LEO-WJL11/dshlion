@@ -36,9 +36,11 @@ OutputDir=release
 OutputBaseFilename=LionBox-Setup-{#AppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
-; 默认 2GB 分卷，避免生成单个 >4GB 的 exe（部分文件系统/浏览器下载受限）
-DiskSpanning=yes
-DiskSliceSize=2000000000
+; 打包成**单个自包含 exe**：不分卷。
+; 以前带 8.9GB 权重时必须分卷（单文件超 4GB 下载/文件系统都别扭），
+; 现在权重改为首次使用时下载，包体只有 ~70MB，分卷反而害人 ——
+; 用户只下 .exe 就会遇到 Inno 的 "Please insert Disk 1" 提示。
+DiskSpanning=no
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
