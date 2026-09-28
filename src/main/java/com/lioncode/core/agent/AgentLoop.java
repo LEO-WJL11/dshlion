@@ -57,6 +57,12 @@ public class AgentLoop {
     /** 每个会话的系统提示词缓存 */
     private final Map<String, String> systemPromptCache = new ConcurrentHashMap<>();
 
+    /**
+     * 「别再来一遍」守卫：同样的调用重复做、失败后硬试，都在这里拦。
+     * 见 ToolCallGuard 类注释里那次真实跑测试的数据（create_directory ×7、fetch_url 失败 ×45）。
+     */
+    private final ToolCallGuard toolGuard = new ToolCallGuard();
+
     public AgentLoop(EventStore eventStore, PluginRegistry pluginRegistry,
                      ConversationHistory conversationHistory, AdapterManager adapterManager,
                      AgentControlManager agentControl, SessionManager sessionManager,
@@ -81,6 +87,9 @@ public class AgentLoop {
      * 有上限才不会因为模型反复吐残缺调用而把会话卡死；超了就按正常收尾处理。
      */
     private static final int MAX_CALL_REPAIR = 2;
+
+    /** 一条用户消息最多允许多少轮工具调用（跑飞时明确报错，别拖到前端超时） */
+    private static final int MAX_TOOL_ROUNDS = 60;
 
     /**
      * 纠正提示词：针对「模型想做工具调用但调用残缺」和「整轮什么都没输出」两种失手。
@@ -188,6 +197,7 @@ public class AgentLoop {
 
         // 2.5 新任务开始：清除之前的暂停/停止状态
         agentControl.reset(sessionId);
+        toolGuard.reset(sessionId);   // 新的一条用户消息：重复调用/连续失败计数清零
 
         // 3. 构建消息列表
         List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
@@ -329,7 +339,29 @@ public class AgentLoop {
                     return stopMsg;
                 }
                 if (toolCall.name() != null && !toolCall.name().isBlank()) {
-                    executeTool(sessionId, toolCall, mode);
+                    ToolCallGuard.Decision decision =
+                        toolGuard.beforeCall(sessionId, toolCall.name(), argsFingerprint(toolCall.arguments()));
+                    if (decision.verdict() == ToolCallGuard.Verdict.ABORT) {
+                        log.warn("重复调用终止任务: {} (第 {} 次)", toolCall.name(), decision.count());
+                        eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
+                            Map.of("error", "重复调用", "tool", toolCall.name()),
+                            "重复调用，已终止");
+                        soundNotifier.play(SoundNotifier.Kind.ERROR);
+                        conversationHistory.addMessage(ConversationMessage.assistant(sessionId, decision.hint()));
+                        return decision.hint();
+                    }
+                    if (decision.verdict() == ToolCallGuard.Verdict.SKIP) {
+                        log.info("跳过重复/连续失败的调用: {} (第 {} 次)", toolCall.name(), decision.count());
+                        conversationHistory.addMessage(
+                            ConversationMessage.toolResult(sessionId, toolCall.id(), toolCall.name(),
+                                "（未执行）" + decision.hint()));
+                        continue;
+                    }
+                    if (decision.hint() != null) {
+                        conversationHistory.addMessage(ConversationMessage.system(sessionId, decision.hint()));
+                    }
+                    toolGuard.afterCall(sessionId, toolCall.name(),
+                        executeTool(sessionId, toolCall, mode));
                 }
             }
 
@@ -366,6 +398,7 @@ public class AgentLoop {
 
                 // 新任务开始：清除之前的暂停/停止状态
                 agentControl.reset(sessionId);
+        toolGuard.reset(sessionId);   // 新的一条用户消息：重复调用/连续失败计数清零
 
                 List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
                 ModelAdapter adapter = adapterManager.getActiveAdapter();
@@ -482,7 +515,36 @@ public class AgentLoop {
                                 // 执行所有工具调用
                                 for (ChatMessage.ToolCall toolCall : toolCalls) {
                                     if (toolCall.name() != null && !toolCall.name().isBlank()) {
-                                        executeTool(sessionId, toolCall, mode);
+                                        ToolCallGuard.Decision decision = toolGuard.beforeCall(sessionId,
+                                            toolCall.name(), argsFingerprint(toolCall.arguments()));
+                                        if (decision.verdict() == ToolCallGuard.Verdict.ABORT) {
+                                            log.warn("重复调用终止任务: {} (第 {} 次)",
+                                                toolCall.name(), decision.count());
+                                            eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
+                                                Map.of("error", "重复调用", "tool", toolCall.name()),
+                                                "重复调用，已终止");
+                                            soundNotifier.play(SoundNotifier.Kind.ERROR);
+                                            conversationHistory.addMessage(
+                                                ConversationMessage.assistant(sessionId, decision.hint()));
+                                            sink.next(AgentChunk.text(decision.hint()));
+                                            sink.complete();
+                                            return;
+                                        }
+                                        if (decision.verdict() == ToolCallGuard.Verdict.SKIP) {
+                                            log.info("跳过重复/连续失败的调用: {} (第 {} 次)",
+                                                toolCall.name(), decision.count());
+                                            conversationHistory.addMessage(
+                                                ConversationMessage.toolResult(sessionId, toolCall.id(),
+                                                    toolCall.name(), "（未执行）" + decision.hint()));
+                                            sink.next(AgentChunk.toolCall(toolCall.name(), "已跳过（重复调用）"));
+                                            continue;
+                                        }
+                                        if (decision.hint() != null) {
+                                            conversationHistory.addMessage(
+                                                ConversationMessage.system(sessionId, decision.hint()));
+                                        }
+                                        toolGuard.afterCall(sessionId, toolCall.name(),
+                                            executeTool(sessionId, toolCall, mode));
                                         // 发送工具执行结果通知
                                         sink.next(AgentChunk.toolCall(toolCall.name(), "执行完成"));
                                     }
@@ -560,6 +622,21 @@ public class AgentLoop {
             log.info("流式任务已手动停止: {} (轮次 {})", sessionId, currentRound);
             soundNotifier.play(SoundNotifier.Kind.ERROR);   // 流式任务被中止：出错误提示音
             sink.next(AgentChunk.error("⏹ 任务已手动停止"));
+            sink.complete();
+            return;
+        }
+
+        // 轮次上限：本地模型一轮几十秒，真跑飞了宁可明确报错，
+        // 也不要让前端的 10 分钟等待超时来兜底（那样用户只看到"❌ 处理超时"，不知道卡在哪）
+        if (currentRound > MAX_TOOL_ROUNDS) {
+            String msg = "⏹ 工具调用轮次过多（" + currentRound + " 轮），已停止。"
+                + "任务可能陷入了重复尝试，建议把要求拆小一点再试。";
+            log.warn(msg + " 会话: {}", sessionId);
+            eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
+                Map.of("error", "轮次过多", "round", currentRound), "轮次过多已停止");
+            soundNotifier.play(SoundNotifier.Kind.ERROR);
+            conversationHistory.addMessage(ConversationMessage.assistant(sessionId, msg));
+            sink.next(AgentChunk.text(msg));
             sink.complete();
             return;
         }
@@ -724,7 +801,13 @@ public class AgentLoop {
     /**
      * 执行单个工具调用
      */
-    private void executeTool(String sessionId, ChatMessage.ToolCall toolCall, AgentMode mode) {
+    /**
+     * 执行一次工具调用。
+     *
+     * @return true = 工具真的跑成功了；false = 没找到工具 / 模式或权限不允许 / 执行失败
+     *         （返回值喂给 {@link ToolCallGuard}，用来发现"某个工具在连续失败还硬试"）
+     */
+    private boolean executeTool(String sessionId, ChatMessage.ToolCall toolCall, AgentMode mode) {
         String toolName = toolCall.name();
         
         // 记录工具调用开始
@@ -744,7 +827,7 @@ public class AgentLoop {
                 Map.of("toolName", toolName, "error", error), error);
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
-            return;
+            return false;
         }
 
         ToolPlugin tool = toolOpt.get();
@@ -757,7 +840,7 @@ public class AgentLoop {
                 Map.of("toolName", toolName, "error", error), error);
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
-            return;
+            return false;
         }
 
         // 审批策略检查：禁止/需确认的工具直接拒绝并反馈给模型
@@ -773,7 +856,7 @@ public class AgentLoop {
             soundNotifier.play(SoundNotifier.Kind.APPROVAL);   // 需要审批：提醒音
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
-            return;
+            return false;
         }
 
         // 权限检查：工具所需权限不得高于会话工作区的授予权限
@@ -785,7 +868,7 @@ public class AgentLoop {
                 Map.of("toolName", toolName, "error", error), error);
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
-            return;
+            return false;
         }
 
         // 执行工具（设置上下文：相对路径基于绑定的工作区解析；
@@ -803,6 +886,7 @@ public class AgentLoop {
                     "工具调用成功: " + toolName);
                 conversationHistory.addMessage(
                     ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, result.content()));
+                return true;
             } else {
                 eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
                     Map.of("toolName", toolName, "error", result.error()),
@@ -810,6 +894,7 @@ public class AgentLoop {
                 conversationHistory.addMessage(
                     ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, 
                         "工具执行错误: " + result.error()));
+                return false;
             }
         } catch (Exception e) {
             log.error("工具执行异常: {}", toolName, e);
@@ -819,6 +904,7 @@ public class AgentLoop {
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName,
                     "工具执行异常: " + e.getMessage()));
+            return false;
         } finally {
             com.lioncode.core.workspace.WorkspaceContext.clear();
             com.lioncode.core.session.SessionContext.clear();
@@ -935,8 +1021,9 @@ public class AgentLoop {
         List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
         if (!tools.isEmpty()) {
             prompt.append("## 可用工具（").append(tools.size()).append(" 个）\n");
+            prompt.append("括号里是参数名，带 * 的是必填。**参数名必须照抄**，写错或漏必填都会直接调用失败。\n");
             for (ToolPlugin tool : tools) {
-                prompt.append("- ").append(tool.getName()).append(": ")
+                prompt.append("- ").append(tool.getName()).append(toolSignature(tool)).append(": ")
                       .append(shortDescription(tool.getDescription())).append("\n");
             }
             prompt.append("\n");
@@ -993,6 +1080,66 @@ public class AgentLoop {
             cut = 48;
         }
         return s.substring(0, Math.min(cut, s.length())).trim();
+    }
+
+    /**
+     * 工具的参数签名，形如 {@code (path*, content)}，带 * 的是必填。
+     *
+     * 【为什么必须有这个】一次真实测试（54 个工具逐一调用）里，几乎每个工具都是
+     * "第一次失败、第二次成功"，失败原因清一色是 `缺少必需参数: action` / `缺少必需参数: input`
+     * —— 因为文本通道下不下发 tools 定义，提示词里又只有工具名和一句描述，
+     * 模型根本不知道参数该叫什么，只能猜。一次失败 = 一整轮（预填充+生成，本地 10~40 秒），
+     * 参数名这几十个字符，换回来的是几十次往返。
+     *
+     * @return 形如 "(path*, content)"；拿不到 schema 就返回空串
+     */
+    private String toolSignature(ToolPlugin tool) {
+        try {
+            Map<String, Object> def = tool.getFunctionDefinition();
+            Object paramsObj = def.get("parameters");
+            if (!(paramsObj instanceof Map<?, ?> params)) {
+                return "";
+            }
+            Object propsObj = params.get("properties");
+            if (!(propsObj instanceof Map<?, ?> props) || props.isEmpty()) {
+                return "";
+            }
+            java.util.Set<String> required = new java.util.HashSet<>();
+            if (propsObj != null && params.get("required") instanceof List<?> reqList) {
+                for (Object r : reqList) {
+                    if (r != null) {
+                        required.add(String.valueOf(r));
+                    }
+                }
+            }
+            StringBuilder sb = new StringBuilder("(");
+            for (Object keyObj : props.keySet()) {
+                String key = String.valueOf(keyObj);
+                if (sb.length() > 1) {
+                    sb.append(", ");
+                }
+                sb.append(key);
+                if (required.contains(key)) {
+                    sb.append("*");
+                }
+            }
+            return sb.append(")").toString();
+        } catch (Exception e) {
+            log.debug("取工具参数签名失败: {}", tool.getName(), e);
+            return "";
+        }
+    }
+
+    /** 参数指纹：用来判断"是不是一模一样的调用"（喂给 ToolCallGuard） */
+    private String argsFingerprint(Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return objectMapper.writeValueAsString(new java.util.TreeMap<>(arguments));
+        } catch (Exception e) {
+            return String.valueOf(arguments);
+        }
     }
 
     /**

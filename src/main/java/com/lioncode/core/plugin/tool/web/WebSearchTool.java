@@ -22,7 +22,7 @@ public class WebSearchTool extends AbstractToolPlugin {
 
     private static final Logger log = LoggerFactory.getLogger(WebSearchTool.class);
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build();
 

@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit;
 public class DownloadTool extends AbstractToolPlugin {
 
     private final OkHttpClient client = new OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build();
+        .connectTimeout(10, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build();
 
     @Override
     public String getId() { return "tool.web.download"; }

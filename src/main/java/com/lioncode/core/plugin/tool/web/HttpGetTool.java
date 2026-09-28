@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
 public class HttpGetTool extends AbstractToolPlugin {
 
     private final OkHttpClient client = new OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build();
+        .connectTimeout(8, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build();
 
     @Override
     public String getId() { return "tool.http.get"; }

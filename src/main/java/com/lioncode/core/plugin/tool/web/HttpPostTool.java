@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 public class HttpPostTool extends AbstractToolPlugin {
 
     private final OkHttpClient client = new OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build();
+        .connectTimeout(8, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build();
 
     @Override
     public String getId() { return "tool.http.post"; }

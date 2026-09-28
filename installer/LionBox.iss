@@ -23,7 +23,8 @@
 ; 1.1.1：模型对外名字改成 lion-models1（1.1.0 会显示底座模型名，别再用那个包）
 ; 1.1.4：修掉「模型说要调工具、结果什么都没发生」——解析器不认 Qwen 模板原生格式
 ;        <tool_call><function=名字><parameter=键>值</parameter></function></tool_call>
-#define AppVersion     "1.1.4"
+; 1.1.5：工具别再来一遍（重复调用/连续失败守卫）+ 工具参数签名进提示词 + 网络工具快速失败
+#define AppVersion     "1.1.5"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
