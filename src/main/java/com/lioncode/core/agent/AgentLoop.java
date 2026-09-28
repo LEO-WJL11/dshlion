@@ -195,7 +195,10 @@ public class AgentLoop {
         // 3.5 构建工具定义列表（仅原生 function calling 模式下随请求下发）
         boolean nativeTools = useNativeTools();
         List<Map<String, Object>> toolDefinitions = nativeTools ? buildToolDefinitions(mode) : List.of();
-        log.info("可用工具数量: {}（工具调用方式: {}）", toolDefinitions.size(),
+        // 注意别打印 toolDefinitions.size()：文本模式下这一坨按设计就是空的（不下发 tools），
+        // 那样日志会写成"可用工具数量: 0"，看起来像工具全丢了（实际提示词里有 54 个）。
+        log.info("本轮可用工具 {} 个（随请求下发 {} 个；工具调用方式: {}）",
+            pluginRegistry.getToolsByMode(mode).size(), toolDefinitions.size(),
             nativeTools ? "原生 function calling" : "文本 <tool_call> 约定");
 
         // 4. 工具调用循环（无轮次上限，直到模型给出最终答案）
@@ -953,6 +956,10 @@ public class AgentLoop {
                 prompt.append("<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.txt\"}}\n</tool_call>\n\n");
                 prompt.append("也认 XML：\n");
                 prompt.append("<tool_call>\n<name>read_file</name><arguments>{\"path\": \"a.txt\"}</arguments>\n</tool_call>\n\n");
+                // 模型是按 Qwen 模板微调的，它最顺手的其实是下面这种；解析器三种都认，
+                // 写清楚是为了让它别在格式上纠结（实测它会先吐一句说明再吐模板格式）。
+                prompt.append("也认模板原生格式：\n");
+                prompt.append("<tool_call>\n<function=read_file>\n<parameter=path>a.txt</parameter>\n</function>\n</tool_call>\n\n");
                 prompt.append("- arguments 必须是合法 JSON；参数名只用上面工具里的，不要发明参数。\n");
                 prompt.append("- 调用写进 <tool_call> 里，正文可以只有一句话，紧跟调用即可。\n\n");
             }
@@ -1177,7 +1184,25 @@ public class AgentLoop {
             return toolCalls;
         }
 
-        // 1. 先尝试解析XML格式
+        // 0. 最先试 Qwen 模板原生格式 <tool_call><function=名字><parameter=键>值</parameter>
+        //
+        // 【为什么必须排在最前面】我们的权重是 Qwen 模板，模型最习惯的输出就是这个形式
+        // （llama-server 开 --jinja 时服务端本来会替我们解析成标准 tool_calls，我们没开）。
+        // 实测漏了这条就直接失败：23:03 那次会话模型输出了完整的
+        // <call><function=execute_command><parameter=command>ls -la && pwd</parameter></function></call>，
+        // 下面的 JSON 解析器却把这个文本拿去当 JSON 解析，报
+        // "Unexpected character ('<')"，整轮工具调用作废 —— 模型白写一轮，
+        // 用户看到的是"它说要调用工具，然后什么都没发生"。
+        for (QwenToolCallParser.Call parsed : QwenToolCallParser.parse(text)) {
+            String id = "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            toolCalls.add(new ChatMessage.ToolCall(id, parsed.name(), parsed.arguments()));
+            log.info("解析到模板原生工具调用: {} {}", parsed.name(), parsed.arguments());
+        }
+        if (!toolCalls.isEmpty()) {
+            return toolCalls;
+        }
+
+        // 1. 再尝试解析XML格式
         toolCalls = parseXmlToolCalls(text);
         if (!toolCalls.isEmpty()) {
             return toolCalls;
@@ -1202,6 +1227,8 @@ public class AgentLoop {
         String result = text.replaceAll("(?s)<tool_call>.*?</tool_call>", "").trim();
         // 移除JSON格式的工具调用（在<tool_call></tool_call>标签内）
         result = result.replaceAll("(?s)<tool_call>.*?</tool_call>", "").trim();
+        // 移除模板原生格式（可能没被 <tool_call> 包裹）
+        result = QwenToolCallParser.stripCalls(result);
         // 移除空的代码块
         result = result.replaceAll("```(xml|json)\\s*```", "").trim();
         return result;

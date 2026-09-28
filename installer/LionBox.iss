@@ -21,7 +21,9 @@
 ; 1.1.2：安装前自动停掉正在运行的 LionBox（旧版会弹「以下程序正在使用文件」那一页，
 ;        用户看到 Java(TM) Platform SE binary / llama-server 两个进程名，以为是报错）
 ; 1.1.1：模型对外名字改成 lion-models1（1.1.0 会显示底座模型名，别再用那个包）
-#define AppVersion     "1.1.3"
+; 1.1.4：修掉「模型说要调工具、结果什么都没发生」——解析器不认 Qwen 模板原生格式
+;        <tool_call><function=名字><parameter=键>值</parameter></function></tool_call>
+#define AppVersion     "1.1.4"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
