@@ -235,7 +235,7 @@ public class ChatController {
             return s;
         }
         // 出厂默认：盒子内置本地模型
-        return "MiMo-V2.6-Distill-Qwen-9B";
+        return "lion-models1";
     }
 
     /**

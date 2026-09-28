@@ -59,7 +59,7 @@ public class LocalModelRuntime {
     @Value("${lionbox.runtime.model-file:lion-merged-Q8_0.gguf}")
     private String modelFile;
 
-    @Value("${lionbox.runtime.model-name:MiMo-V2.6-Distill-Qwen-9B}")
+    @Value("${lionbox.runtime.model-name:lion-models1}")
     private String modelName;
 
     /** 运行时可执行文件；留空则自动在程序目录下找 runtime-vulkan/llama-server.exe */

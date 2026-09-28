@@ -251,6 +251,6 @@ public class SessionTitleService {
         if (top instanceof String s && !s.isBlank()) {
             return s;
         }
-        return "MiMo-V2.6-Distill-Qwen-9B";
+        return "lion-models1";
     }
 }

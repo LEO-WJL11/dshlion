@@ -33,7 +33,7 @@ public record ModelProviderConfig(
     public static final String LOCAL_RUNTIME_HOST = "127.0.0.1";
 
     /** 盒子内置模型名称 */
-    public static final String LOCAL_MODEL_NAME = "MiMo-V2.6-Distill-Qwen-9B";
+    public static final String LOCAL_MODEL_NAME = "lion-models1";
 
     /** 盒子内置模型文件（随盒子交付的GGUF权重） */
     public static final String LOCAL_MODEL_FILE = "lion-merged-Q8_0.gguf";
@@ -57,6 +57,6 @@ public record ModelProviderConfig(
         new ModelProviderConfig("lionbox-local", "LionBox 本地模型",
             localBaseUrl(),
             null, false,
-            List.of("MiMo-V2.6-Distill-Qwen-9B"), "openai")
+            List.of("lion-models1"), "openai")
     );
 }

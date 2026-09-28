@@ -85,7 +85,7 @@ lionbox:
     host: 127.0.0.1
     port: 8788
     model-file: lion-merged-Q8_0.gguf
-    model-name: MiMo-V2.6-Distill-Qwen-9B
+    model-name: lion-models1
     # 本地运行时的OpenAI兼容端点根地址（供适配器与应用默认配置使用）
     base-url: http://127.0.0.1:8788/v1
 

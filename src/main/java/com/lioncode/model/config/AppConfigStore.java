@@ -40,7 +40,13 @@ public class AppConfigStore {
     /** 盒子出厂默认模型 */
     private static final String LOCAL_PROVIDER_ID = "lionbox-local";
     private static final String CUSTOM_PROVIDER_ID = "lionbox-custom";
-    private static final String LOCAL_MODEL = "MiMo-V2.6-Distill-Qwen-9B";
+    private static final String LOCAL_MODEL = "lion-models1";
+    /**
+     * 历史配置里写下的模型名。
+     * 早期版本在界面上直接暴露了底座模型名，现在统一叫 lion-models1，
+     * 老配置靠 {@link #migrateLegacyModelName()} 迁移，不要删。
+     */
+    private static final String LEGACY_LOCAL_MODEL = "MiMo-V2.6-Distill-Qwen-9B";
 
     /** 运行模式：用随盒子交付的本地模型 */
     public static final String MODE_LOCAL = "local";
@@ -127,6 +133,9 @@ public class AppConfigStore {
             changed = true;
         }
 
+        // ---- 1.5) 历史配置里的模型名迁移（老版本暴露的是底座模型名）----
+        changed |= migrateLegacyModelName();
+
         // ---- 2) 按模式落配置 ----
         if (MODE_CUSTOM.equals(mode)) {
             Map<String, Object> block = getMap("openai");
@@ -187,6 +196,74 @@ public class AppConfigStore {
                 config.get("providerMode"), config.get("provider"), config.get("baseUrl"),
                 config.get("model"));
         }
+    }
+
+    /**
+     * 把历史配置里残留的底座模型名改成 lion-models1。
+     *
+     * 生效中的 model / openai.model 两个键在本地模式下本来就由第 2 步强制覆盖，
+     * 真正会漏下来的是 providers 实例里登记的可选模型列表——界面读的就是它，
+     * 所以老配置升级后下拉框里还会显示底座名字。
+     *
+     * 只动盒子自己那两个实例（本地实例、或端点仍是本地端点的实例）：
+     * 自定义模式下用户完全可能自己就填了这个模型名，那是他的配置，不能改。
+     */
+    @SuppressWarnings("unchecked")
+    private boolean migrateLegacyModelName() {
+        Object raw = config.get("providers");
+        if (!(raw instanceof Map)) {
+            return false;
+        }
+        Map<String, Object> providers = new java.util.LinkedHashMap<>((Map<String, Object>) raw);
+        boolean changed = false;
+        for (Map.Entry<String, Object> entry : providers.entrySet()) {
+            if (!(entry.getValue() instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> instance = new java.util.LinkedHashMap<>(
+                (Map<String, Object>) entry.getValue());
+            boolean isBoxInstance = LOCAL_PROVIDER_ID.equals(entry.getKey())
+                || isKnownLocalBaseUrl(instance.get("baseUrl"));
+            if (!isBoxInstance) {
+                continue;
+            }
+            boolean touched = false;
+
+            if (LEGACY_LOCAL_MODEL.equals(str(instance.get("model")))) {
+                instance.put("model", LOCAL_MODEL);
+                touched = true;
+            }
+            Object models = instance.get("availableModels");
+            if (models instanceof java.util.List<?> list) {
+                java.util.List<Object> fixed = new java.util.ArrayList<>(list.size());
+                for (Object item : list) {
+                    if (!(item instanceof Map)) {
+                        fixed.add(item);
+                        continue;
+                    }
+                    Map<String, Object> model = new java.util.LinkedHashMap<>((Map<String, Object>) item);
+                    for (String field : new String[] {"modelId", "modelName"}) {
+                        if (LEGACY_LOCAL_MODEL.equals(str(model.get(field)))) {
+                            model.put(field, LOCAL_MODEL);
+                            touched = true;
+                        }
+                    }
+                    fixed.add(model);
+                }
+                if (touched) {
+                    instance.put("availableModels", fixed);
+                }
+            }
+            if (touched) {
+                providers.put(entry.getKey(), instance);
+                changed = true;
+            }
+        }
+        if (changed) {
+            config.put("providers", providers);
+            log.info("历史配置中的模型名已更新：{} → {}", LEGACY_LOCAL_MODEL, LOCAL_MODEL);
+        }
+        return changed;
     }
 
     private String str(Object o) {
