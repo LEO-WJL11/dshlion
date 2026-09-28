@@ -38,6 +38,14 @@ public class RuntimeController {
     private final LocalModelRuntime localRuntime;
     private final com.lioncode.model.runtime.PrewarmService prewarmService;
 
+    /**
+     * 仅用于「提示词体检」接口（GET /api/runtime/prompt-preview）。
+     * 用字段注入 + required=false：避免为了一个调试接口去改构造器、
+     * 也避免和 AgentLoop 形成构造器环。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.lioncode.core.agent.AgentLoop agentLoop;
+
     public RuntimeController(AppConfigStore configStore, AdapterManager adapterManager,
                              LocalModelRuntime localRuntime,
                              com.lioncode.model.runtime.PrewarmService prewarmService) {
@@ -252,6 +260,60 @@ public class RuntimeController {
     @GetMapping("/warmup")
     public ApiResponse<Map<String, Object>> warmUpResult() {
         return ApiResponse.ok(prewarmService.lastResult());
+    }
+
+    /**
+     * 提示词体检：把这一轮真正会发给模型的系统提示词 + 工具定义原样吐出来。
+     *
+     * 存在的意义是「慢的问题要能被量化」——提示词多大、多少字符、和上一版比少了多少，
+     * 都得有数，不能靠感觉说"优化过了"。用本地运行时的 /tokenize 把返回的文本
+     * 数一遍，就是模型眼里真实的 token 数。
+     *
+     * 例：GET /api/runtime/prompt-preview?mode=standard&message=帮我改一下这个文件
+     */
+    @GetMapping("/prompt-preview")
+    public ApiResponse<Map<String, Object>> promptPreview(
+            @RequestParam(value = "mode", required = false, defaultValue = "standard") String modeName,
+            @RequestParam(value = "message", required = false, defaultValue = "") String message,
+            @RequestParam(value = "workspace", required = false, defaultValue = "") String workspace,
+            @RequestParam(value = "full", required = false, defaultValue = "false") boolean full) {
+
+        if (agentLoop == null) {
+            return new ApiResponse<>(false, "AgentLoop 不可用（该接口只在完整应用里生效）", null, null);
+        }
+        com.lioncode.core.agent.AgentMode mode;
+        try {
+            mode = com.lioncode.core.agent.AgentMode.valueOf(modeName.trim().toUpperCase());
+        } catch (Exception e) {
+            return new ApiResponse<>(false, "未知模式: " + modeName, null, null);
+        }
+        String ws = workspace == null || workspace.isBlank()
+            ? System.getProperty("user.dir")
+            : workspace;
+        String prompt = agentLoop.previewSystemPrompt(mode, ws, message);
+
+        Map<String, Object> out = new HashMap<>();
+        out.put("mode", mode.name());
+        out.put("workspace", ws);
+        out.put("nativeTools", agentLoop.previewUsesNativeTools());
+        out.put("chars", prompt.length());
+        out.put("lines", prompt.split("\n", -1).length);
+        // 原生通道才会下发的 tools 定义：本地模式下现在是空数组（省掉的就这一坨）
+        try {
+            var defs = agentLoop.previewToolDefinitions(mode);
+            String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(defs);
+            out.put("toolDefinitionsCount", defs.size());
+            out.put("toolDefinitionsChars", json.length());
+            if (full) {
+                out.put("toolDefinitions", json);
+            }
+        } catch (Exception e) {
+            out.put("toolDefinitionsError", String.valueOf(e.getMessage()));
+        }
+        // 默认只回前 400 字，够看结构；要看全文加 full=true（调提示词时才需要）
+        out.put("head", prompt.length() > 400 ? prompt.substring(0, 400) : prompt);
+        out.put("systemPrompt", full ? prompt : null);
+        return ApiResponse.ok(out);
     }
 
     /**

@@ -149,6 +149,18 @@ public class AgentLoop {
         if (com.lioncode.model.config.AppConfigStore.TOOLCALL_NATIVE.equals(mode)) {
             return !rejected;
         }
+        // ---- AUTO ----
+        // 本地模型必须走文本 <tool_call> 约定，两个理由都是硬事实：
+        //   1) 随包交付的 llama-server **没开 --jinja**，请求里的 tools 会被服务端直接丢掉，
+        //      模型根本看不到工具定义 —— 下发 tools 纯粹白烧 token（tools 的 JSON 有 4-5K token，
+        //      每次请求都要预填充，本机实测首个请求前缀被顶到 6.3K token ≈ 10 秒）；
+        //   2) 这个模型本来就是按文本 <tool_call> 约定微调的，提示词教它走原生反而互相打架。
+        // AppConfigStore 里 TOOLCALL_AUTO 的注释一直就是这么写的，只是这里没实现
+        // （native 分支只看 prefersTextToolCalls()，而 OpenAI 兼容适配器恒为 false），
+        // 所以线上跑的一直是「下发 tools（被无视）+ 提示词不教文本格式」这个最差组合。
+        if (configStore != null && configStore.isLocalMode()) {
+            return false;
+        }
         return adapter == null || (!adapter.prefersTextToolCalls() && !rejected);
     }
 
@@ -891,13 +903,12 @@ public class AgentLoop {
     private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage,
                                      boolean nativeTools) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("你是Lion-Code Agent，一个强大的AI编程助手。你的核心能力是通过调用工具来实际操作文件、执行命令、完成任务。\n\n");
+        prompt.append("你是 Lion-Code Agent，通过调用工具真实操作文件和命令来完成任务。\n\n");
 
         // 当前工作区：所有文件操作和命令执行都在此工作区内进行
-        prompt.append("## 当前工作区\n\n");
-        prompt.append("工作区路径: ").append(workspacePath != null ? workspacePath : "(未设置)").append("\n");
-        prompt.append("所有文件操作和命令执行都必须在这个工作区内进行。");
-        prompt.append("文件工具的参数path支持相对路径（相对工作区根目录）或绝对路径。\n\n");
+        prompt.append("## 工作区\n");
+        prompt.append(workspacePath != null ? workspacePath : "(未设置)").append("\n");
+        prompt.append("文件与命令都在此工作区内；path 可用相对路径（相对工作区）或绝对路径。\n\n");
 
         // 根据模式添加专属提示词（每个模式独立撰写，行为规则各不相同）
         prompt.append(modeInstructions(mode));
@@ -905,96 +916,98 @@ public class AgentLoop {
         // 注入适用技能的领域能力提示词（按用户消息匹配）
         prompt.append(buildSkillPrompt(userMessage));
 
-        prompt.append("\n## ⚠️ 核心规则：必须调用工具\n\n");
-        prompt.append("当用户请求涉及以下操作时，你**必须**调用相应工具来执行，**绝对不能**只给出文字描述或建议：\n");
-        prompt.append("- 读取/写入/修改/删除文件 → 调用 read_file / write_file / modify_file / delete_file\n");
-        prompt.append("- 执行命令（编译、运行、安装等）→ 调用 execute_command\n");
-        prompt.append("- 查看目录/搜索文件 → 调用 list_directory / search_in_files / glob_files\n");
-        prompt.append("- Git操作 → 调用 git_status / git_commit / git_diff 等\n");
-        prompt.append("- 查看系统信息 → 调用 system_info / get_env / working_directory\n\n");
+        // 输出纪律：本地模型约 10.8 token/s，一句话能交代的事写成一段就是几十秒。
+        // 这几条集中放在一起（散着写模型会挑着遵守），顺序按"影响速度"排。
+        prompt.append("\n## 输出纪律（直接影响速度，必须守）\n");
+        prompt.append("1. 正文极简：一轮最多两句话（≤60 字）。不解释背景、不罗列计划、不复述文件内容、不重复工具结果。\n");
+        prompt.append("2. 要动手就直接动手：不要写“我这就去读取/修改…”这类过渡句，直接给工具调用。\n");
+        prompt.append("3. 一轮只给一个工具调用；需要多步就分成多轮，宁可多走一轮，也不要在一轮里塞多个调用。\n");
+        prompt.append("4. 工具结果回来后：能用一句话回答就回答，要继续做就直接调下一个工具，不要总结过程。\n");
+        prompt.append("5. 不输出思考过程、不写“第一步/第二步”的规划清单、不复述工具参数。\n\n");
 
-        // 添加可用工具描述
+        // 工具清单：只给「名字 + 一句用途」。
+        // 本地 llama-server 没开 --jinja，tools 定义发过去会被服务端丢掉，
+        // 所以这份清单就是模型能看到的**唯一**工具说明：名字不能省（省了它就开始编造工具），
+        // 但描述要砍到一句话 —— 53 个工具的长描述累积起来是几百 token 的白烧。
         List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
         if (!tools.isEmpty()) {
-            prompt.append("### 可用工具列表\n\n");
+            prompt.append("## 可用工具（").append(tools.size()).append(" 个）\n");
             for (ToolPlugin tool : tools) {
-                prompt.append("- **").append(tool.getName()).append("**: ").append(tool.getDescription()).append("\n");
+                prompt.append("- ").append(tool.getName()).append(": ")
+                      .append(shortDescription(tool.getDescription())).append("\n");
             }
-            prompt.append("\n### 工具调用格式\n\n");
+            prompt.append("\n");
+
+            prompt.append("## 工具调用格式\n");
             if (nativeTools) {
                 // 原生 function calling：工具定义已随请求下发，让模型走 API 的工具通道。
                 //
                 // 【千万别在这里放文本格式的代码块示例】—— 实测 MiMo 会因此把两种机制
                 // 混在一起，返回一个残缺的原生调用（name=null、arguments="{}"、
                 // finish_reason=stop），工具直接跑不起来。去掉示例后同一请求立刻正常。
-                // 所以这里只做一句"系统也认文本格式"的说明，不给范例。
-                prompt.append("请**直接使用原生工具调用（function calling）**：\n");
-                prompt.append("本次请求已随消息下发了完整的工具定义（tools），");
-                prompt.append("把你的调用放在 tool_calls 里返回，**不要**把工具调用写成正文文字。\n\n");
-                prompt.append("若接口不支持原生调用，系统同样能识别文本形式的工具调用。\n\n");
-                prompt.append("**重要**：\n");
-                prompt.append("1. 【强制规则】一次只能调用一个工具，绝对不要在一次响应中返回多个工具调用；必须等待工具结果返回后再决定下一步\n");
-                prompt.append("2. arguments 必须是合法的 JSON 对象，参数名必须来自工具定义里的 parameters，不要自己发明\n");
+                // 所以这里只做一句说明，不给范例。
+                prompt.append("工具定义已随本次请求下发：把调用放在 tool_calls 里返回，不要写成正文文字。\n");
+                prompt.append("arguments 必须是合法 JSON 对象，参数名取自工具定义的 parameters，不要自己发明。\n\n");
             } else {
-            prompt.append("你**必须**使用以下两种格式之一来调用工具：\n\n");
-            
-            prompt.append("#### 格式一：JSON格式（推荐）\n\n");
-            prompt.append("```json\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("{\"name\": \"工具名称\", \"arguments\": {\"参数名\": \"参数值\"}}\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            prompt.append("#### 格式二：XML格式（备选）\n\n");
-            prompt.append("```xml\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("  <name>工具名称</name>\n");
-            prompt.append("  <arguments>{\"参数名\": \"参数值\"}</arguments>\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            // 给出具体示例
-            prompt.append("### 调用示例\n\n");
-            
-            prompt.append("**示例1：读取文件（XML格式）**\n");
-            prompt.append("用户：帮我看看 src/main.java 的内容\n");
-            prompt.append("你的回复：好的，我来读取这个文件。\n");
-            prompt.append("```xml\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("  <name>read_file</name>\n");
-            prompt.append("  <arguments>{\"path\": \"src/main.java\"}</arguments>\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            prompt.append("**示例2：执行命令（JSON格式）**\n");
-            prompt.append("用户：帮我编译这个项目\n");
-            prompt.append("你的回复：好的，我来执行编译。\n");
-            prompt.append("```json\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("{\"name\": \"execute_command\", \"arguments\": {\"command\": \"mvn compile\"}}\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            prompt.append("**示例3：写入文件（XML格式）**\n");
-            prompt.append("用户：创建一个 hello.py 文件\n");
-            prompt.append("你的回复：好的，我来创建文件。\n");
-            prompt.append("```xml\n");
-            prompt.append("<tool_call>\n");
-            prompt.append("  <name>write_file</name>\n");
-            prompt.append("  <arguments>{\"path\": \"hello.py\", \"content\": \"print('Hello, World!')\"}</arguments>\n");
-            prompt.append("</tool_call>\n");
-            prompt.append("```\n\n");
-
-            prompt.append("**重要**：\n");
-            prompt.append("1. 【强制规则】一次只能调用一个工具，绝对不要在一次回复中输出多个工具调用；必须等待工具结果返回后再决定下一步\n");
-            prompt.append("2. 工具调用必须放在代码块中（```xml 或 ```json）\n");
-            prompt.append("3. arguments必须是合法的JSON字符串\n");
-            prompt.append("4. 不要在工具调用前后添加多余文字，直接给出调用即可\n");
+                prompt.append("首选 JSON：\n");
+                prompt.append("<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.txt\"}}\n</tool_call>\n\n");
+                prompt.append("也认 XML：\n");
+                prompt.append("<tool_call>\n<name>read_file</name><arguments>{\"path\": \"a.txt\"}</arguments>\n</tool_call>\n\n");
+                prompt.append("- arguments 必须是合法 JSON；参数名只用上面工具里的，不要发明参数。\n");
+                prompt.append("- 调用写进 <tool_call> 里，正文可以只有一句话，紧跟调用即可。\n\n");
             }
         }
 
+        prompt.append("## 必须用工具的情形\n");
+        prompt.append("读/写/改/删文件、执行命令、看目录、搜内容、Git 操作、查系统信息 —— 一律调工具，不许只给建议。\n");
+
         return prompt.toString();
     }
+
+    /**
+     * 工具描述砍到一句话：合并空白，遇到第一个句号/分号就截断，最长 48 字。
+     *
+     * 清单只用来告诉模型"有哪些工具"，细节在微调时已经学过；
+     * 原文照抄会把几百 token 的说明塞进每一轮请求里。
+     */
+    private static String shortDescription(String description) {
+        if (description == null) {
+            return "";
+        }
+        String s = description.replaceAll("\\s+", " ").trim();
+        int cut = s.length();
+        for (String sep : new String[] { "。", "；", ". ", "; " }) {
+            int i = s.indexOf(sep);
+            if (i > 0 && i < cut) {
+                cut = i;
+            }
+        }
+        if (cut > 48) {
+            cut = 48;
+        }
+        return s.substring(0, Math.min(cut, s.length())).trim();
+    }
+
+    /**
+     * 提示词体检用：把这一轮真正会发出去的系统提示词原样返回。
+     *
+     * 不另写一份示例，走的就是真实链路（同一个 buildSystemPrompt + 同一个 useNativeTools），
+     * 否则量出来的数字没意义。见 GET /api/runtime/prompt-preview。
+     */
+    public String previewSystemPrompt(AgentMode mode, String workspacePath, String userMessage) {
+        return buildSystemPrompt(mode, workspacePath, userMessage, useNativeTools());
+    }
+
+    /** 提示词体检用：当前这一轮走原生 function calling 还是文本 &lt;tool_call&gt; 约定 */
+    public boolean previewUsesNativeTools() {
+        return useNativeTools();
+    }
+
+    /** 提示词体检用：原生通道下才会随请求下发的 tools 定义（用来量"不下发能省多少 token"） */
+    public java.util.List<java.util.Map<String, Object>> previewToolDefinitions(AgentMode mode) {
+        return buildToolDefinitions(mode);
+    }
+
 
     /**
      * 各工作模式的专属提示词

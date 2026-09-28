@@ -421,6 +421,11 @@ public class AppConfigStore {
         return TOOLCALL_AUTO;
     }
 
+    /** 当前是否在用随盒子交付的本地模型（本地模式下端点是我们自己拉起的 llama-server） */
+    public boolean isLocalMode() {
+        return MODE_LOCAL.equals(str(config.get("providerMode")).trim().toLowerCase());
+    }
+
     /**
      * 校验外部传入的工具调用方式，非法值返回 null（调用方据此报错）
      */
