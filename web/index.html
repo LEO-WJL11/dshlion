@@ -1195,7 +1195,23 @@ var App = {
             return '<span style="color:#e17055">✗ 找不到模型运行时（runtime-vulkan\\llama-server.exe）</span>';
         }
         if (!st.modelInstalled) {
-            return '<span style="color:#e17055">✗ 找不到模型文件 ' + (st.modelFile || '') + '</span>';
+            // 没下载 ≠ 出错：权重是首次使用时才下的，这里要把话说清楚，
+            // 不然用户一打开设置页就以为坏了（而且真正的失败原因会被这行红字盖住）。
+            if (st.phase === 'downloading') {
+                var mb = Math.floor((st.downloadBytes || 0) / 1048576);
+                if (st.downloadTotal > 0) {
+                    var pct = Math.floor((st.downloadBytes || 0) * 100 / st.downloadTotal);
+                    return '<span style="color:#fdcb6e">⏳ 正在下载模型… ' + pct + '%（'
+                         + mb + ' / ' + Math.floor(st.downloadTotal / 1048576) + ' MB）</span>';
+                }
+                return '<span style="color:#fdcb6e">⏳ 正在下载模型…（已下 ' + mb + ' MB）</span>';
+            }
+            if (st.lastError) {
+                return '<span style="color:#e17055">✗ 模型没能就绪：' + st.lastError + '</span>';
+            }
+            return '<span style="color:#fdcb6e">○ 模型尚未下载（约 8.9GB，只下一次）</span>'
+                 + '<span style="color:#6a6a80"> —— 发第一条消息会自动开始下载，'
+                 + '也可以点下面的「下载模型」先下好</span>';
         }
         if (st.running) {
             return '<span style="color:#00b894">✓ 模型已加载，正在服务</span>'
