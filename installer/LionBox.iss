@@ -18,7 +18,8 @@
 
 #define AppName        "LionBox"
 #define AppNameCN      "LionBox 本地 AI 助手"
-#define AppVersion     "1.1.0"
+; 1.1.1：模型对外名字改成 lion-models1（1.1.0 会显示底座模型名，别再用那个包）
+#define AppVersion     "1.1.1"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
