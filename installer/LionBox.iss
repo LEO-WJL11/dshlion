@@ -18,8 +18,10 @@
 
 #define AppName        "LionBox"
 #define AppNameCN      "LionBox 本地 AI 助手"
+; 1.1.2：安装前自动停掉正在运行的 LionBox（旧版会弹「以下程序正在使用文件」那一页，
+;        用户看到 Java(TM) Platform SE binary / llama-server 两个进程名，以为是报错）
 ; 1.1.1：模型对外名字改成 lion-models1（1.1.0 会显示底座模型名，别再用那个包）
-#define AppVersion     "1.1.1"
+#define AppVersion     "1.1.2"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
@@ -49,6 +51,14 @@ UninstallDisplayName={#AppNameCN}
 UninstallDisplayIcon={app}\{#AppExeName}
 ; 模型文件较大，给出磁盘空间下限
 ExtraDiskSpaceRequired=0
+; 升级安装时 LionBox 往往正在运行（javaw.exe + llama-server.exe 都跑在安装目录里），
+; Inno 默认会弹「Preparing to Install / 以下应用程序正在使用文件」那一页，
+; 用户看到 "Java(TM) Platform SE binary" 和 "llama-server" 两个名字，以为是程序报错。
+; force = 直接关掉，不问；配合下面 [Code] 里的停服逻辑，用户一路 Next 就行。
+CloseApplications=force
+; 关掉之后不要由安装程序自动拉起：那样只有 Agent 起来、启动窗口横幅没有，
+; 状态半截。改成让用户在完成页点「立即启动 LionBox」（走正常启动器）。
+RestartApplications=no
 
 [Languages]
 Name: "chinese"; MessagesFile: "compiler:Default.isl"
@@ -108,4 +118,37 @@ begin
         Result := False;
     end;
   end;
+end;
+
+// 安装前把正在运行的 LionBox 停掉。
+// 优先用安装目录里自带的 stopper.ps1（逻辑已实测过：按 jar 名定位 Agent + 停 llama-server）；
+// 没有（首次安装）或调用失败时，再用一条只针对安装目录内进程的兜底命令 ——
+// 绝不能按进程名一把梭，用户机器上别人家的 java / llama-server 不能被误杀。
+procedure StopRunningLionBox();
+var
+  ResultCode: Integer;
+  Stopper: String;
+  Cmd: String;
+begin
+  Stopper := ExpandConstant('{app}\stopper.ps1');
+  if FileExists(Stopper) then
+  begin
+    if Exec('powershell.exe',
+            '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + Stopper + '"',
+            '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      Sleep(1200);
+  end;
+
+  Cmd := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ' +
+         '"Get-Process javaw,java,llama-server -ErrorAction SilentlyContinue | ' +
+         'Where-Object { $_.Path -like ''' + ExpandConstant('{app}') + '\*'' } | ' +
+         'Stop-Process -Force -ErrorAction SilentlyContinue"';
+  Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningLionBox();
+  Result := '';
 end;
