@@ -11,6 +11,7 @@ import com.lioncode.web.dto.SessionDto;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 会话管理控制器
@@ -20,6 +21,10 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/sessions")
 public class SessionController {
+
+    /** 这个类原来没有 logger，清空对话要记日志，补上 */
+    private static final org.slf4j.Logger log =
+        org.slf4j.LoggerFactory.getLogger(SessionController.class);
 
     private final SessionManager sessionManager;
     private final WorkspaceManager workspaceManager;
@@ -126,6 +131,40 @@ public class SessionController {
         conversationHistory.clearHistory(sessionId);
         conversationHistory.deleteFromDisk(sessionId);
         return ApiResponse.ok("会话已销毁", null);
+    }
+
+    /**
+     * 清空所有对话（界面上那个「清空」按钮）。
+     *
+     * <p>逐个走和单删一样的清理（内存会话 + 会话元数据 + 对话历史 + 磁盘上的历史文件），
+     * 一个失败不影响其余 —— 最后返回实际删掉的数量，界面据此提示。
+     * 工作区本身不会被删，只是里面的对话没了。
+     */
+    @DeleteMapping
+    public ApiResponse<Map<String, Object>> destroyAllSessions() {
+        List<String> ids = sessionManager.getAllSessions().stream()
+            .map(SessionManager.Session::sessionId).toList();
+        int deleted = 0;
+        int failed = 0;
+        for (String sid : ids) {
+            try {
+                sessionManager.destroySession(sid);
+                sessionPersistence.deleteSession(sid);
+                conversationHistory.clearHistory(sid);
+                conversationHistory.deleteFromDisk(sid);
+                deleted++;
+            } catch (Exception e) {
+                failed++;
+                log.warn("清空对话时删除会话失败: {} - {}", sid, e.getMessage());
+            }
+        }
+        log.info("用户清空所有对话: 共 {} 个，删除成功 {}，失败 {}", ids.size(), deleted, failed);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("total", ids.size());
+        data.put("deleted", deleted);
+        data.put("failed", failed);
+        String msg = "已清空 " + deleted + " 个对话" + (failed > 0 ? "（" + failed + " 个没删掉）" : "");
+        return ApiResponse.ok(msg, data);
     }
 
     /**

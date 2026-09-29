@@ -46,7 +46,8 @@
 ; 1.1.18：写文件保留原编码（GBK 的 ANSI 中文文件改完仍是 GBK，不会被悄悄转成 UTF-8）
 ; 1.2.0（功能版）：安装时可选模型版本（Q8_0/Q4_K_M/IQ4_XS）；设置页可改 llama.cpp 全部参数；
 ;                 对话列表按工作区分组成可收起的选项卡，每个对话能选工作区
-#define AppVersion     "1.2.0"
+; 1.2.1：侧栏加「清空所有对话」按钮（两次确认，工作区保留）+ DELETE /api/sessions
+#define AppVersion     "1.2.1"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

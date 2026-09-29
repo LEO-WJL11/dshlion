@@ -42,6 +42,8 @@
         .ws-pick { margin-left: 4px; background: #23233a; color: #a0a0b8; border: 1px solid #2d2d4a;
                    border-radius: 5px; font-size: 10.5px; padding: 1px 3px; max-width: 112px; }
         .ws-pick:hover { color: #e8e8f0; }
+        #clearAllSessions:hover { color: #e17055; }
+        #clearAllSessions:disabled { opacity: .4; cursor: default; }
         .session-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; margin-bottom: 4px; border-radius: 8px; cursor: pointer; }
         .session-item:hover { background: #2a2a4a; }
         .session-item.active { background: #6c5ce7; color: white; }
@@ -138,7 +140,11 @@
             </div>
         </div>
         <div class="sidebar-section">
-            <div class="section-title">对话（按工作区分组）</div>
+            <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
+                <span>对话（按工作区分组）<span id="sessionTotal" style="color:#6a6a80;font-weight:400"></span></span>
+                <button class="ws-add" id="clearAllSessions" title="删除所有对话（工作区保留）"
+                        style="font-size:11.5px" onclick="App.deleteAllSessions()">🗑 清空</button>
+            </div>
             <div class="session-list" id="sessionList"><div style="text-align:center;color:#6a6a80;padding:20px">暂无会话</div></div>
         </div>
         <div class="sidebar-section">
@@ -549,6 +555,43 @@ var App = {
         });
     },
 
+    /**
+     * 清空所有对话（工作区保留）。
+     *
+     * 这是不可撤销的操作，所以问两次：第二次把"要删掉多少个"写清楚，
+     * 避免手滑点一下就没了。
+     */
+    deleteAllSessions: function() {
+        var self = this;
+        var n = (this.sessionsData || []).length;
+        if (n === 0) { alert('当前没有对话。'); return; }
+        if (!confirm('要删除全部 ' + n + ' 个对话吗？\n\n工作区会保留，对话内容与历史都会删掉。')) return;
+        if (!confirm('再确认一次：这 ' + n + ' 个对话删掉之后**无法恢复**。继续？')) return;
+
+        var btn = document.getElementById('clearAllSessions');
+        if (btn) { btn.disabled = true; btn.textContent = '清空中…'; }
+        fetch('/api/sessions', {method: 'DELETE'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (btn) { btn.disabled = false; btn.textContent = '🗑 清空'; }
+                if (!res || !res.success) { alert('清空失败：' + ((res && res.error) || '未知错误')); return; }
+                var deleted = (res.data && res.data.deleted) || n;
+                // 当前对话已经不存在了：清干净界面上的消息区
+                self.sessionId = null;
+                var box = document.getElementById('messages');
+                if (box) box.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:40px">'
+                    + '对话已清空，点「＋ 新建对话」开始</div>';
+                var bc = document.getElementById('bcSession');
+                if (bc) bc.textContent = '未选择对话';
+                self.loadSessions();
+                setTimeout(function() { alert('已清空 ' + deleted + ' 个对话。'); }, 50);
+            })
+            .catch(function(e) {
+                if (btn) { btn.disabled = false; btn.textContent = '🗑 清空'; }
+                alert('清空失败：' + e);
+            });
+    },
+
     /** 工作区显示名：取路径最后一段（反斜杠/正斜杠都认） */
     wsLabel: function(ws) {
         var p = (ws && (ws.path || ws.workspaceId)) ? String(ws.path || ws.workspaceId) : '';
@@ -633,6 +676,12 @@ var App = {
             order.splice(order.indexOf(cur.workspaceId), 1);
             order.unshift(cur.workspaceId);
         }
+
+        // 标题右边显示对话总数（清空前用户能看到要删掉多少）
+        var totalEl = document.getElementById('sessionTotal');
+        if (totalEl) totalEl.textContent = sessions.length ? '（' + sessions.length + '）' : '';
+        var clearBtn = document.getElementById('clearAllSessions');
+        if (clearBtn) clearBtn.disabled = sessions.length === 0;
 
         if (!order.length) {
             list.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:20px">还没有工作区<br>' +
