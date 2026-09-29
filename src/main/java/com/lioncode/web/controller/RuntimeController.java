@@ -225,6 +225,9 @@ public class RuntimeController {
             notice = "你选的是 " + configured + "，本机还没有这份权重（首次启动或点下面的按钮会自动下载）";
         }
         data.put("modelMismatch", notice);
+        // 模型目录：界面要把它显示给用户 —— 权重放哪、想自己塞 GGUF 就塞这里
+        data.put("modelDir", localRuntime.modelDir());
+        data.put("modelDirs", localRuntime.modelDirs());
         return ApiResponse.ok(data);
     }
 
@@ -247,23 +250,120 @@ public class RuntimeController {
      */
     @GetMapping("/local/models")
     public ApiResponse<List<Map<String, Object>>> localModels() {
-        List<Map<String, Object>> list = new java.util.ArrayList<>();
         String current = localRuntime.effectiveModelFile();
         // 实际在用的：**没启动过就是空**，不能拿"配置里选的"顶上 ——
         // 否则界面会把用户选的 IQ4 标成"正在用"，而他实际跑的可能是兜底的 Q8。
         String inUseNow = localRuntime.modelFileInUse();
+        String downloading = localRuntime.status().downloadingFile();
+
+        // 本地现成的（含用户自己塞进来的 GGUF），按文件名索引，官方那份的"已下载"以它为准
+        Map<String, LocalModelRuntime.LocalModel> local = new java.util.LinkedHashMap<>();
+        for (LocalModelRuntime.LocalModel lm : localRuntime.scanLocalModels()) {
+            local.put(lm.file(), lm);
+        }
+
+        List<Map<String, Object>> list = new java.util.ArrayList<>();
         for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("file", c.file());
             m.put("label", c.label());
             m.put("sizeGb", c.sizeGb());
             m.put("note", c.note());
+            m.put("custom", false);
             m.put("current", c.file().equals(inUseNow));             // 实际在用的
             m.put("configured", c.file().equals(current));          // 配置里选的
             m.put("downloaded", localRuntime.isModelDownloaded(c.file()));
+            m.put("downloading", c.file().equals(downloading));
+            list.add(m);
+        }
+
+        // 模型目录里除官方那几份之外的 GGUF：用户自己放进去的，直接能用
+        for (LocalModelRuntime.LocalModel lm : local.values()) {
+            boolean known = false;
+            for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
+                if (c.file().equals(lm.file())) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) {
+                continue;                                            // 官方那份上面已经有一行了
+            }
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("file", lm.file());
+            m.put("label", lm.file());
+            m.put("sizeGb", lm.sizeGb());
+            // 小于 1 GB 的按 MB 显示（自己塞的模型可能就几百 MB，写 0.0 GB 等于没说）
+            m.put("sizeText", lm.bytes() >= 1073741824L
+                ? String.format("%.2f GB", lm.sizeGb())
+                : (lm.bytes() / 1048576L) + " MB");
+            m.put("note", "你自己放进模型目录的（本地现成，直接能用）");
+            m.put("custom", true);
+            m.put("path", lm.path());
+            m.put("current", lm.file().equals(inUseNow));
+            m.put("configured", lm.file().equals(current));
+            m.put("downloaded", true);
+            m.put("downloading", false);
             list.add(m);
         }
         return ApiResponse.ok(list);
+    }
+
+    /**
+     * 只下载指定的那一份量化（不切换当前模型）。
+     *
+     * <p>用户可以先把几份都下好再挑一份用；下载走后台线程，进度看
+     * {@code /api/runtime/local} 的 phase=downloading + downloadBytes/downloadTotal。
+     */
+    @PostMapping("/local/models/download")
+    public ApiResponse<LocalModelRuntime.Status> downloadOneModel(@RequestBody Map<String, Object> body) {
+        String file = body == null ? null : str(body.get("file"));
+        if (file == null || file.isBlank()) {
+            return ApiResponse.error("缺少 file（要下载哪个模型文件）");
+        }
+        Map<String, Object> r = localRuntime.startDownload(file);
+        if (Boolean.TRUE.equals(r.get("downloaded"))) {
+            return ApiResponse.ok(file + " 本地已经有了", localRuntime.status());
+        }
+        if (!Boolean.TRUE.equals(r.get("started"))) {
+            return new ApiResponse<>(false, null, localRuntime.status(), String.valueOf(r.get("error")));
+        }
+        log.info("用户请求下载模型权重: {}", file);
+        return ApiResponse.ok("已开始在后台下载 " + file + "（进度见顶部横幅；下完可在列表里点「使用」）",
+            localRuntime.status());
+    }
+
+    /**
+     * 在资源管理器里打开模型目录（用户想自己往里塞 GGUF 时用）。
+     */
+    @PostMapping("/local/models/open-dir")
+    public ApiResponse<Map<String, Object>> openModelDir() {
+        String dir = localRuntime.modelDir();
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("dir", dir);
+        boolean ok = false;
+        try {
+            java.nio.file.Path d = java.nio.file.Path.of(dir);
+            if (!java.nio.file.Files.isDirectory(d)) {
+                java.nio.file.Files.createDirectories(d);
+            }
+            String os = System.getProperty("os.name", "").toLowerCase();
+            if (os.contains("win")) {
+                new ProcessBuilder("explorer.exe", d.toString()).start();
+                ok = true;
+            } else if (os.contains("mac")) {
+                new ProcessBuilder("open", d.toString()).start();
+                ok = true;
+            } else {
+                new ProcessBuilder("xdg-open", d.toString()).start();
+                ok = true;
+            }
+        } catch (Exception e) {
+            log.warn("打开模型目录失败: {}", e.getMessage());
+            data.put("error", e.getMessage());
+        }
+        data.put("opened", ok);
+        return ApiResponse.ok(ok ? "已打开模型目录：" + dir : "没能自动打开，请手动打开：" + dir, data);
     }
 
     /**
@@ -278,24 +378,44 @@ public class RuntimeController {
         if (file == null || file.isBlank()) {
             return ApiResponse.error("缺少 file（要切换到的模型文件名）");
         }
-        String matched = null;
+        if (file.contains("/") || file.contains("\\") || file.contains("..")) {
+            return ApiResponse.error("模型文件名不能带路径：" + file + "（把文件放进模型目录，这里只填文件名）");
+        }
+        boolean known = false;
         for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
             if (c.file().equals(file)) {
-                matched = c.file();
+                known = true;
                 break;
             }
         }
-        if (matched == null) {
-            return ApiResponse.error("不认识的模型: " + file + "（可选：" + LocalModelRuntime.AVAILABLE_MODELS.stream()
-                .map(LocalModelRuntime.ModelChoice::file).reduce((a, b) -> a + "、" + b).orElse("") + "）");
+        // 官方量化，或者本地现成的任意 .gguf（含用户自己塞进来的）
+        boolean local = localRuntime.hasModelFile(file);
+        if (!known && !local) {
+            return ApiResponse.error("找不到这个模型: " + file
+                + "。可选：" + LocalModelRuntime.AVAILABLE_MODELS.stream()
+                    .map(LocalModelRuntime.ModelChoice::file).reduce((a, b) -> a + "、" + b).orElse("")
+                + "；自己塞的 GGUF 请放进模型目录：" + localRuntime.modelDir());
         }
-        log.info("用户切换本地模型: {} → {}", localRuntime.effectiveModelFile(), matched);
-        configStore.updateLlamaConfig(Map.of("modelFile", matched));
+        log.info("用户切换本地模型: {} → {}", localRuntime.effectiveModelFile(), file);
+        configStore.updateLlamaConfig(Map.of("modelFile", file));
         localRuntime.stop();
-        LocalModelRuntime.Status st = body.get("download") != null
-            && !"false".equalsIgnoreCase(str(body.get("download")))
-            ? localRuntime.download() : localRuntime.status();
-        return ApiResponse.ok("已切换到 " + matched + (st.modelInstalled() ? "（权重已就绪）" : "（尚未下载）"), st);
+
+        boolean wantDownload = body.get("download") != null
+            && !"false".equalsIgnoreCase(str(body.get("download")));
+        LocalModelRuntime.Status st = localRuntime.status();
+        if (local) {
+            return ApiResponse.ok("已切换到 " + file + (known ? "（权重已就绪）" : "（本地现成的）")
+                + "，发消息或点「重启本地模型」即可生效", st);
+        }
+        if (!wantDownload) {
+            return ApiResponse.ok("已切换到 " + file + "（尚未下载）", st);
+        }
+        // 后台下载：以前这里同步等下完，8.87 GB 会把界面按钮堵十几分钟
+        Map<String, Object> r = localRuntime.startDownload(file);
+        if (Boolean.TRUE.equals(r.get("started"))) {
+            return ApiResponse.ok("已切换到 " + file + "，权重正在**后台下载**（进度见顶部横幅），下完就能用", st);
+        }
+        return ApiResponse.ok("已切换到 " + file + "（尚未下载：" + r.get("error") + "）", st);
     }
 
     /**
@@ -320,12 +440,17 @@ public class RuntimeController {
      */
     @PostMapping("/local/download")
     public ApiResponse<LocalModelRuntime.Status> downloadLocal() {
-        log.info("用户手动请求下载本地模型权重");
-        LocalModelRuntime.Status st = localRuntime.download();
-        if (st.modelInstalled()) {
-            return ApiResponse.ok("模型已就绪", st);
+        String file = localRuntime.effectiveModelFile();
+        if (localRuntime.isModelDownloaded(file)) {
+            return ApiResponse.ok(file + " 本地已经有了", localRuntime.status());
         }
-        return new ApiResponse<>(false, "模型下载未完成：" + st.lastError(), st, st.lastError());
+        log.info("用户手动请求下载本地模型权重: {}", file);
+        // 后台下：以前是同步等，8.87 GB 会把界面按钮堵十几分钟（进度也看不见）
+        Map<String, Object> r = localRuntime.startDownload(file);
+        if (Boolean.TRUE.equals(r.get("started"))) {
+            return ApiResponse.ok("已开始在后台下载 " + file + "（进度见顶部横幅）", localRuntime.status());
+        }
+        return new ApiResponse<>(false, null, localRuntime.status(), String.valueOf(r.get("error")));
     }
 
     /**

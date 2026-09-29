@@ -1240,34 +1240,74 @@ var App = {
                 + '改完点保存，然后<b style="color:#e8e8f0">重启本地模型</b>才会生效。<br>'
                 + '拿不准的项就别动，默认值都是按这台机器调过的。</p>';
 
-            // ---- 模型版本 ----
+            // ---- 模型版本（可以同时存好几份，想用哪份点哪份）----
             html += '<div style="' + box + '">';
             html += '<div style="font-weight:600;margin-bottom:8px">模型版本</div>';
-            html += '<div style="font-size:11.5px;color:#6a6a80;margin-bottom:8px">'
-                 + '安装时选的就是这几个；换一个会自动下载（体积见下），下完重启生效。</div>';
-            html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-            models.forEach(function(m) {
-                html += '<tr style="border-bottom:1px solid #23233a">'
-                     +    '<td style="padding:7px 4px">'
-                     +      '<div style="color:#e8e8f0">' + self.escapeHtml(m.label)
-                     +        (m.current ? ' <span style="color:#6c5ce7">· 正在用</span>' : '')
-                     +        (!m.current && m.configured
-                                  ? (hasCurrent
-                                      ? ' <span style="color:#e17055">· 已选中但没在用</span>'
-                                      : ' <span style="color:#6c5ce7">· 当前选择（还没启动）</span>')
-                                  : '')
-                     +        '</div>'
-                     +      '<div style="color:#6a6a80;font-size:11px">' + self.escapeHtml(m.note) + '</div>'
-                     +      '<div style="color:#6a6a80;font-size:11px">' + m.sizeGb + ' GB · '
-                     +        (m.downloaded ? '已下载' : '未下载') + '</div>'
-                     +    '</td>'
-                     +    '<td style="padding:7px 4px;text-align:right;white-space:nowrap">';
-                if (!m.current) {
-                    html += '<button class="btn btn-sm" onclick="App.switchLlamaModel(\'' + m.file + '\')">切换'
-                         +  (m.downloaded ? '' : '并下载') + '</button>';
+
+            // 模型目录：用户问过“文件到底放哪”，这里把路径直接给出来，
+            // 并且说清楚可以自己往里面塞 GGUF。
+            var mdir = d.modelDir || '';
+            html += '<div style="border:1px solid #2d2d4a;background:#1a1a2e;border-radius:8px;'
+                 +  'padding:9px 11px;margin-bottom:10px;font-size:11.5px;color:#a0a0b8;line-height:1.75">'
+                 +  '<div>模型目录：<span style="font-family:monospace;color:#e8e8f0" title="'
+                 +  self.escapeAttr(mdir) + '">' + self.escapeHtml(mdir) + '</span></div>'
+                 +  '<div>下载的权重都放在这里；<b style="color:#e8e8f0">你自己的 .gguf 直接丢进去，'
+                 +  '下面就会出现，点「使用」就行</b>。一份权重一个文件，'
+                 +  '可以同时存好几份。</div>'
+                 +  '<div style="margin-top:7px">'
+                 +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 打开文件夹</button>'
+                 +  '<button class="btn btn-sm" style="margin-left:6px" onclick="App.renderLlamaTab()">🔄 刷新</button>'
+                 +  '</div></div>';
+
+            // 一行 = 一份权重：名字、状态、体积、按钮（下载 / 使用 / 重启生效）
+            var modelRow = function(m) {
+                var tags = '';
+                if (m.current) {
+                    tags += ' <span style="color:#6c5ce7">· 正在用</span>';
+                } else if (m.configured) {
+                    tags += hasCurrent
+                        ? ' <span style="color:#e17055">· 已选中但没在用</span>'
+                        : ' <span style="color:#6c5ce7">· 当前选择（还没启动）</span>';
                 }
-                html += '</td></tr>';
-            });
+                // 自己塞的小模型可能不到 1 GB，后端会给 sizeText（按 MB 显示）
+                var sizeTxt = m.sizeText ? m.sizeText : (m.sizeGb + ' GB');
+                var state = sizeTxt + (m.downloading
+                    ? ' · <span style="color:#fdcb6e">正在下载…</span>'
+                    : ' · ' + (m.downloaded ? '已下载' : '未下载'));
+                var row = '<tr style="border-bottom:1px solid #23233a">'
+                        +    '<td style="padding:7px 4px">'
+                        +      '<div style="color:#e8e8f0">' + self.escapeHtml(m.label) + tags + '</div>'
+                        +      '<div style="color:#6a6a80;font-size:11px">' + self.escapeHtml(m.note || '') + '</div>'
+                        +      '<div style="color:#6a6a80;font-size:11px">' + state + '</div>'
+                        +    '</td>'
+                        +    '<td style="padding:7px 4px;text-align:right;white-space:nowrap">';
+                if (m.downloading) {
+                    row += '<button class="btn btn-sm" disabled>下载中…</button>';
+                } else {
+                    if (!m.downloaded) {
+                        row += '<button class="btn btn-sm" title="先下载不切换，可以把几份都下好"'
+                             +        ' onclick="App.downloadLlamaModel(\'' + m.file + '\')">下载</button>';
+                    }
+                    if (!m.current) {
+                        row += '<button class="btn btn-sm" style="margin-left:6px"'
+                             +        ' onclick="App.switchLlamaModel(\'' + m.file + '\')">'
+                             +        (m.configured ? '重启生效' : '使用') + '</button>';
+                    }
+                }
+                row += '</td></tr>';
+                return row;
+            };
+
+            var official = models.filter(function(m) { return !m.custom; });
+            var custom = models.filter(function(m) { return m.custom; });
+            html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+            official.forEach(function(m) { html += modelRow(m); });
+            if (custom.length) {
+                html += '<tr><td colspan="2" style="padding:10px 4px 4px;color:#a0a0b8;font-size:11.5px;'
+                     +  'border-top:1px solid #2d2d4a">你自己放进来的（' + custom.length
+                     +  '）——直接能用</td></tr>';
+                custom.forEach(function(m) { html += modelRow(m); });
+            }
             html += '</table></div>';
 
             // ---- 上下文 / 显存 ----
@@ -1364,19 +1404,49 @@ var App = {
         }).catch(function(e) { if (msg) msg.textContent = '保存失败：' + e; });
     },
 
-    /** 切换模型版本（没下载的会先下） */
+    /** 切换/使用某个模型（没下载的会在**后台**开始下，不再把这个请求堵上十几分钟） */
     switchLlamaModel: function(file) {
-        if (!confirm('切换到 ' + file + '？没下载过的话会先下载（几百 MB 到 9 GB），期间本地模型不可用。')) return;
+        if (!confirm('用 ' + file + '？\n\n没下过的话会在后台下载（几百 MB 到 9 GB，进度看顶部横幅）。')) return;
         var msg = document.getElementById('llamaMsg');
-        if (msg) msg.textContent = '正在切换（下载中请耐心等）…';
+        if (msg) msg.textContent = '正在切换…';
         fetch('/api/runtime/local/model', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({file: file, download: true})
         }).then(function(r) { return r.json(); }).then(function(res) {
-            if (msg) msg.textContent = res && res.success ? '已切换：' + file + '。' : ('切换失败：' + ((res && res.error) || ''));
-            // 切换后刷新这个页签，让"当前"标记对上
+            if (msg) msg.textContent = (res && res.success)
+                ? ((res.message || '已切换') + '（' + file + '）')
+                : ('切换失败：' + ((res && res.error) || ''));
             setTimeout(function() { App.renderLlamaTab(); }, 1200);
         }).catch(function(e) { if (msg) msg.textContent = '切换失败：' + e; });
+    },
+
+    /** 只下载这一份（不切换）：可以把几份都先下好，再挑一份用 */
+    downloadLlamaModel: function(file) {
+        var msg = document.getElementById('llamaMsg');
+        if (msg) msg.textContent = '已开始下载 ' + file + '（后台进行，进度看顶部横幅）…';
+        fetch('/api/runtime/local/models/download', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({file: file})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (msg) msg.textContent = (res && res.success)
+                ? (res.message || '已开始下载')
+                : ('下载没启动：' + ((res && res.error) || ''));
+            setTimeout(function() { App.renderLlamaTab(); }, 1500);
+        }).catch(function(e) { if (msg) msg.textContent = '下载没启动：' + e; });
+    },
+
+    /** 打开模型目录（想自己往里面塞 GGUF 时用） */
+    openModelsDir: function() {
+        var msg = document.getElementById('llamaMsg');
+        fetch('/api/runtime/local/models/open-dir', {method: 'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                var dir = (res && res.data && res.data.dir) || '';
+                if (msg) msg.textContent = (res && res.success)
+                    ? ('已打开：' + dir + '（把 .gguf 丢进去，点「刷新」就能看到）')
+                    : ('没能自动打开，请手动打开：' + dir);
+            })
+            .catch(function(e) { if (msg) msg.textContent = '没能打开目录：' + e; });
     },
 
     /** 重启本地模型（参数生效） */

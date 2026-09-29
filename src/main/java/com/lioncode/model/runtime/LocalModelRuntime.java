@@ -346,7 +346,9 @@ public class LocalModelRuntime {
             logFile() == null ? "" : logFile().toString(),
             lastError.get(),
             downloadBytes,
-            downloadTotal
+            downloadTotal,
+            downloadingFile.get(),
+            modelDir()
         );
     }
 
@@ -364,9 +366,13 @@ public class LocalModelRuntime {
         String resolvedModelPath,
         String logPath,
         String lastError,
-        /** 自动下载进度：已下字节 / 总字节（-1 = 未知），phase=downloading 时前端可以显示进度 */
+        /** 下载进度：已下字节 / 总字节（-1 = 未知），phase=downloading 时前端可以显示进度 */
         long downloadBytes,
-        long downloadTotal
+        long downloadTotal,
+        /** 正在下载哪一份权重（空 = 没在下） */
+        String downloadingFile,
+        /** 模型权重放哪个目录（界面要把这个路径显示给用户，他可以自己往里塞 GGUF） */
+        String modelDir
     ) {}
 
     // ------------------------------------------------------------------
@@ -446,7 +452,10 @@ public class LocalModelRuntime {
      * 顺手把 llama-server 拉起来（那样会占显存）。已经有权重就直接返回。
      */
     public Status download() {
-        if (resolvesModel() != null) {
+        // 【坑】这里以前判的是 resolvesModel() —— 它会"找不到配置的就拿现成的"，
+        // 于是配置的那份明明没下，也会被当成"已经有了"，按钮点了没反应。
+        // 只看配置的那一份在不在，缺了才去下。
+        if (configuredModelPath() != null) {
             return status();
         }
         downloadModelIfAllowed();
@@ -535,9 +544,13 @@ public class LocalModelRuntime {
     // 模型自动下载（ModelScope）
     // ------------------------------------------------------------------
 
-    /** 同一时刻只允许一个下载（开机后台下载和第一条消息可能同时来抢）。 */
+    /** 同一时刻只允许一个下载（开机后台下载、界面下载按钮、第一条消息可能同时来抢）。 */
     private final java.util.concurrent.atomic.AtomicBoolean downloadingNow =
         new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** 正在下载哪一份权重（空 = 没在下）。界面要能说清"在下的这一份"，而不只是个百分比。 */
+    private final java.util.concurrent.atomic.AtomicReference<String> downloadingFile =
+        new java.util.concurrent.atomic.AtomicReference<>("");
 
     /**
      * 开机后把"用户选的那份权重"在后台补齐。
@@ -571,38 +584,203 @@ public class LocalModelRuntime {
         t.start();
     }
 
-    /** 权重不在就自动下载；下不了就返回 null，让上层走原有的报错路径。 */
+    /** 配置里那一份不在就自动下载；下不了就返回 null，让上层走原有的报错路径。 */
     private Path downloadModelIfAllowed() {
         if (!autoDownload) {
             log.warn("本地没有权重 {}，且已关闭自动下载（lionbox.runtime.auto-download=false）",
                 effectiveModelFile());
             return null;
         }
+        return downloadFileIfAllowed(effectiveModelFile());
+    }
+
+    /**
+     * 后台下载**指定的一份**权重（不切换当前模型）。
+     *
+     * <p>给界面每一行的「下载」按钮用：用户可以先把几份都下好，再挑一份用。
+     * 同一时刻只允许一个下载（另一份在下载时点别的会被告知"正在下载"）。
+     *
+     * @return started/downloaded/busy/error 之一，界面据此提示
+     */
+    public java.util.Map<String, Object> startDownload(String file) {
+        java.util.Map<String, Object> r = new java.util.LinkedHashMap<>();
+        if (file == null || file.isBlank()) {
+            r.put("started", false);
+            r.put("error", "缺少文件名");
+            return r;
+        }
+        if (!isKnownModel(file)) {
+            // 只从官方仓库下清单里那几份；用户自己塞的 GGUF 本来就在本地，不用下
+            r.put("started", false);
+            r.put("error", "只能下载清单里的量化版本：" + knownModelNames());
+            return r;
+        }
+        if (isModelDownloaded(file)) {
+            r.put("started", false);
+            r.put("downloaded", true);
+            return r;
+        }
+        if (downloadingNow.get()) {
+            r.put("started", false);
+            r.put("busy", true);
+            r.put("error", "已经有一个下载在进行中（" + downloadingFile.get() + "），等它下完");
+            return r;
+        }
+        Thread t = new Thread(() -> downloadFileIfAllowed(file), "lionbox-model-dl");
+        t.setDaemon(true);
+        t.start();
+        r.put("started", true);
+        return r;
+    }
+
+    private Path downloadFileIfAllowed(String file) {
         if (!downloadingNow.compareAndSet(false, true)) {
             log.info("已有一个下载在进行中，这次不重复下");
             return null;
         }
         try {
-            Path target = downloadTarget();
+            Path target = downloadTarget(file);
             if (target == null) {
                 log.error("找不到可写目录来存放模型权重");
                 return null;
             }
             try {
+                downloadingFile.set(file);
+                downloadBytes = 0;
+                downloadTotal = -1;
                 phase.set("downloading");
-                downloadModel(target);
+                downloadModel(target, file);
                 phase.set("idle");
-                return resolvesModel();
+                log.info("权重已就绪：{}，可到「设置 → 模型版本」里点「使用」", file);
+                return findModelFile(file);
             } catch (Exception e) {
                 phase.set("failed");
-                lastError.set("自动下载模型失败：" + e.getMessage());
-                log.error("自动下载模型失败: {}", e.getMessage());
+                lastError.set("下载模型失败：" + e.getMessage());
+                log.error("下载模型失败: {}", e.getMessage());
                 return null;
+            } finally {
+                downloadingFile.set("");
             }
         } finally {
             downloadingNow.set(false);
         }
     }
+
+    // ------------------------------------------------------------------
+    // 模型目录：告诉用户文件放哪、扫出他自己塞进来的 GGUF
+    // ------------------------------------------------------------------
+
+    /** 会被搜模型文件的目录（含各自的 models 子目录）。 */
+    public java.util.List<String> modelDirs() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (Path d : scanDirs()) {
+            if (!out.contains(d.toString())) {
+                out.add(d.toString());
+            }
+        }
+        return out;
+    }
+
+    /** 模型默认放哪（下载就落这个目录，界面把它显示给用户） */
+    public String modelDir() {
+        Path t = downloadTarget(effectiveModelFile());
+        if (t != null && t.getParent() != null) {
+            return t.getParent().toString();
+        }
+        Path home = Path.of(System.getProperty("user.home", "."), ".lioncode", "models");
+        return home.toString();
+    }
+
+    private java.util.List<Path> scanDirs() {
+        java.util.List<Path> dirs = new java.util.ArrayList<>(appDirs());
+        dirs.add(Path.of(System.getProperty("user.home", "."), ".lioncode", "models"));
+        return dirs;
+    }
+
+    /**
+     * 本地现成的权重（含**用户自己塞进来的**那些 GGUF）。
+     *
+     * <p>不要求 ≥ minModelBytes：用户可能就放个小模型来试；只有太小的
+     * （&lt; 1 MB）才当垃圾忽略掉。同名文件按目录顺序取先找到的那个。
+     */
+    public java.util.List<LocalModel> scanLocalModels() {
+        java.util.LinkedHashMap<String, LocalModel> found = new java.util.LinkedHashMap<>();
+        for (Path dir : scanDirs()) {
+            for (Path base : new Path[] {dir, dir.resolve("models")}) {
+                if (!Files.isDirectory(base)) {
+                    continue;
+                }
+                try (java.util.stream.Stream<Path> st = Files.list(base)) {
+                    for (Path p : st.toList()) {
+                        String name = p.getFileName().toString();
+                        if (!name.toLowerCase().endsWith(".gguf")) {
+                            continue;                       // *.gguf.part 之类不算
+                        }
+                        if (!Files.isRegularFile(p)) {
+                            continue;
+                        }
+                        long size = Files.size(p);
+                        if (size < 1024L * 1024) {
+                            continue;                       // 1 MB 以下当垃圾
+                        }
+                        if (found.containsKey(name)) {
+                            continue;
+                        }
+                        found.put(name, new LocalModel(name, p.toString(),
+                            Math.round(size / 1073741824.0 * 1000) / 1000.0, isKnownModel(name), size));
+                    }
+                } catch (Exception ignored) {
+                    // 目录读不了就跳过
+                }
+            }
+        }
+        java.util.List<LocalModel> list = new java.util.ArrayList<>(found.values());
+        list.sort((a, b) -> Long.compare(b.bytes(), a.bytes()));   // 大的在前
+        return list;
+    }
+
+    /** 本地现成的一份权重（给"界面点使用"判断能不能用） */
+    public boolean hasModelFile(String file) {
+        return file != null && findModelFile(file) != null;
+    }
+
+    private Path findModelFile(String file) {
+        if (file == null || file.isBlank()) {
+            return null;
+        }
+        for (Path dir : scanDirs()) {
+            for (Path base : new Path[] {dir, dir.resolve("models")}) {
+                Path p = base.resolve(file);
+                if (Files.isRegularFile(p)) {
+                    return p;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isKnownModel(String file) {
+        for (ModelChoice c : AVAILABLE_MODELS) {
+            if (c.file().equals(file)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String knownModelNames() {
+        StringBuilder sb = new StringBuilder();
+        for (ModelChoice c : AVAILABLE_MODELS) {
+            if (sb.length() > 0) {
+                sb.append("、");
+            }
+            sb.append(c.file());
+        }
+        return sb.toString();
+    }
+
+    /** 本地现成的一份权重（把用户自己塞的 GGUF 也算进来） */
+    public record LocalModel(String file, String path, double sizeGb, boolean known, long bytes) {}
 
     /** 权重放哪：优先程序目录（可写的话），否则退到 ~/.lioncode/models。 */
     /**
@@ -643,10 +821,12 @@ public class LocalModelRuntime {
         }
     }
 
-    private Path downloadTarget() {
-        for (Path dir : appDirs()) {            try {
+    private Path downloadTarget(String file) {
+        String name = (file == null || file.isBlank()) ? effectiveModelFile() : file;
+        for (Path dir : appDirs()) {
+            try {
                 if (Files.isDirectory(dir) && Files.isWritable(dir)) {
-                    return dir.resolve(effectiveModelFile());
+                    return dir.resolve(name);
                 }
             } catch (Exception ignored) {
                 // 下一个候选
@@ -655,7 +835,7 @@ public class LocalModelRuntime {
         Path home = Path.of(System.getProperty("user.home", "."), ".lioncode", "models");
         try {
             Files.createDirectories(home);
-            return home.resolve(effectiveModelFile());
+            return home.resolve(name);
         } catch (IOException e) {
             return null;
         }
@@ -671,11 +851,11 @@ public class LocalModelRuntime {
      * 先写 *.part 边下边报进度，下完校验「GGUF 魔数 + 最小体积」再原子改名；
      * 中途断了下次带 Range 续传（.part 留着）。
      */
-    private void downloadModel(Path target) throws IOException, InterruptedException {
+    private void downloadModel(Path target, String file) throws IOException, InterruptedException {
         Path part = target.resolveSibling(target.getFileName() + ".part");
         long already = Files.isRegularFile(part) ? Files.size(part) : 0L;
         String url = modelBaseUrl + "/api/v1/models/" + modelRepo + "/repo?Revision="
-            + modelRevision + "&FilePath=" + URLEncoder.encode(effectiveModelFile(), StandardCharsets.UTF_8);
+            + modelRevision + "&FilePath=" + URLEncoder.encode(file, StandardCharsets.UTF_8);
 
         HttpClient client = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -701,7 +881,7 @@ public class LocalModelRuntime {
         }
         downloadTotal = total;
         downloadBytes = already;
-        log.info("开始下载模型 {}（仓库 {}，已下 {} MB{}）", effectiveModelFile(), modelRepo,
+        log.info("开始下载模型 {}（仓库 {}，已下 {} MB{}）", file, modelRepo,
             already / 1024 / 1024,
             total > 0 ? "，共约 " + (total / 1024 / 1024) + " MB" : "");
 
