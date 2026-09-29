@@ -38,7 +38,8 @@
 ;          cmd/PowerShell 命令分流 + 输出 UTF-8、move/copy 参数别名、git_commit 兜底身份
 ; 1.1.14：glob_files 的 path 可选、modify_file 支持 append、
 ;          delete_file 拒绝删除工作区根目录（安全护栏）+ 递归删失败退回系统 rmdir
-#define AppVersion     "1.1.14"
+; 1.1.15：git_remote 支持 add/remove、问答接口暴露 timeoutSeconds（30 秒下限可验证）
+#define AppVersion     "1.1.15"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
