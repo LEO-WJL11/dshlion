@@ -56,7 +56,7 @@ public class FileModifyTool extends AbstractToolPlugin {
                 return error("文件不存在: " + path);
             }
 
-            List<String> lines = Files.readAllLines(filePath);
+            List<String> lines = readTextLines(filePath);
             int startLine = arguments.containsKey("startLine") ? 
                 ((Number) arguments.get("startLine")).intValue() : 0;
             String content = getStringArg(arguments, "content", "");

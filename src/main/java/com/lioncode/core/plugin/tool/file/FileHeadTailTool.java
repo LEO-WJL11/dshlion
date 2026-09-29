@@ -45,7 +45,7 @@ public class FileHeadTailTool extends AbstractToolPlugin {
             }
             int lines = arguments.containsKey("lines") ? ((Number) arguments.get("lines")).intValue() : 10;
             
-            List<String> allLines = Files.readAllLines(Path.of(path));
+            List<String> allLines = readTextLines(Path.of(path));
             List<String> result;
             
             if ("head".equals(mode)) {

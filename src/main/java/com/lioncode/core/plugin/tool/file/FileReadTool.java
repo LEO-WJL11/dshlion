@@ -68,7 +68,7 @@ public class FileReadTool extends AbstractToolPlugin {
                 return error("不是普通文件: " + path);
             }
 
-            var lines = Files.readAllLines(filePath);
+            var lines = readTextLines(filePath);
             int start = Math.max(0, offset - 1);
             int end = Math.min(lines.size(), start + limit);
             

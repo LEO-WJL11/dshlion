@@ -45,8 +45,26 @@ public class FileCopyTool extends AbstractToolPlugin {
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
         try {
-            String source = resolvePath(getRequiredStringArg(arguments, "source"));
-            String target = resolvePath(getRequiredStringArg(arguments, "target"));
+            // 参数别名：模型常写 src/from，只认 source 会白报一次"缺少必需参数"
+        java.util.Map<String, Object> args = new java.util.LinkedHashMap<>(arguments);
+        if (!args.containsKey("source")) {
+            for (String alias : new String[]{"src", "from", "path", "oldPath"}) {
+                if (args.get(alias) != null) {
+                    args.put("source", args.get(alias));
+                    break;
+                }
+            }
+        }
+        if (!args.containsKey("target")) {
+            for (String alias : new String[]{"dest", "destination", "to", "newPath"}) {
+                if (args.get(alias) != null) {
+                    args.put("target", args.get(alias));
+                    break;
+                }
+            }
+        }
+        String source = resolvePath(getRequiredStringArg(args, "source"));
+            String target = resolvePath(getRequiredStringArg(args, "target"));
 
             Path sourcePath = Path.of(source);
             Path targetPath = Path.of(target);

@@ -149,6 +149,53 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
     }
 
     /**
+     * 容错读文本文件。
+     *
+     * <p>【实测】用户机器上的中文文件有的是 ANSI/GBK 存的，原来 {@code Files.readAllLines}
+     * 用 UTF-8 严格解码，遇到这种文件直接抛
+     * {@code MalformedInputException: Input length = 1}，read_file 报"读取文件失败"。
+     * 这里按 UTF-8 → GBK → 替换字符 的顺序退，保证读得出来。
+     */
+    protected java.util.List<String> readTextLines(java.nio.file.Path path) throws java.io.IOException {
+        byte[] bytes = java.nio.file.Files.readAllBytes(path);
+        String text = decodeText(bytes);
+        // 统一换行后切行（保留末尾空行语义与 readAllLines 一致）
+        java.util.List<String> lines = new java.util.ArrayList<>(
+            java.util.Arrays.asList(text.split("\r?\n", -1)));
+        if (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty()) {
+            lines.remove(lines.size() - 1);
+        }
+        return lines;
+    }
+
+    /** 容错读整个文本文件（同上）。 */
+    protected String readTextFile(java.nio.file.Path path) throws java.io.IOException {
+        return decodeText(java.nio.file.Files.readAllBytes(path));
+    }
+
+    /** 按 UTF-8 → GBK 的顺序容错解码（Windows 上命令输出常是 GBK 编码）。 */
+    protected static String decodeText(byte[] bytes) {
+        // 【注意】`new String(bytes, UTF_8)` **不会抛异常** —— 它把非法字节换成 U+FFFD。
+        // 第一版就是拿它当"先试 UTF-8"用的，结果 GBK 文件读出来全是乱码（虽然不报错了）。
+        // 必须用 REPORT 模式的解码器：真抛了才说明不是 UTF-8，这时再退 GBK。
+        try {
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (Exception notUtf8) {
+            try {
+                return java.nio.charset.Charset.forName("GBK").newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+            } catch (Exception e2) {
+                return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    /**
      * 把 git 相关异常翻译成"能照着做"的提示。
      *
      * <p>实测（用户日志）：在还没建的目录里跑 git，报的是

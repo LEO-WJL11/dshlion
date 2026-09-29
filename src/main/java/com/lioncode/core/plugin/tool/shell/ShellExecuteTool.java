@@ -45,6 +45,24 @@ public class ShellExecuteTool extends AbstractToolPlugin {
         );
     }
 
+    /**
+     * 这条命令像不像 cmd 语法。
+     *
+     * <p>判据：用了 cmd 的内置命令 + `/x` 风格开关（`rmdir /s /q`、`del /f`、`xcopy /e`…），
+     * 或者 cmd 独占的命令名（`dir`、`type`、`findstr`、`tasklist`、`taskkill`）。
+     */
+    private static boolean looksLikeCmd(String command) {
+        if (command == null || command.isBlank()) {
+            return false;
+        }
+        String c = command.trim().toLowerCase();
+        boolean slashSwitch = c.matches(".*\\s/[a-z](\\s|$).*");
+        if (slashSwitch && c.matches(".*\\b(rmdir|rd|del|erase|copy|move|xcopy|robocopy|attrib|icacls|net)\\b.*")) {
+            return true;
+        }
+        return c.matches("^(dir|type|findstr|tasklist|taskkill|where|ver|set)\\b.*");
+    }
+
     /** 有 PowerShell 7（pwsh）就用它：它支持 `&&`，比 5.1 更接近模型习惯。 */
     private static boolean pwshAvailable() {
         try {
@@ -75,9 +93,19 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             // 改成 PowerShell：ls/cat/rm/cp/mv/pwd 都是内置别名，能直接跑通。
             // 另外 PS 5.1 不认 `&&` 串联，这里顺手换成 `;`（模型很爱写 `ls && pwd`）。
             if (isWindows()) {
-                String shell = pwshAvailable() ? "pwsh" : "powershell";
-                String script = command.replace("&&", ";");
-                pb.command(shell, "-NoProfile", "-NonInteractive", "-Command", script);
+                // 【实测】模型两种写法都会用：
+                //   ls -la            → PowerShell 的别名，用 cmd 会报"不是内部或外部命令"
+                //   rmdir /s /q xxx   → cmd 的开关，用 PowerShell 会报"找不到与参数名称/q匹配的参数"
+                // 所以按写法分流：带 cmd 风格开关的交给 cmd /c，其余交给 PowerShell。
+                // 输出编码：Windows 控制台默认用 GBK 输出，Java 侧按 UTF-8 读会变乱码
+                // （实测 `ls` 返回的"目录: …"就是乱码，模型根本读不懂）。让子进程直接吐 UTF-8。
+                if (looksLikeCmd(command)) {
+                    pb.command("cmd", "/c", "chcp 65001>nul & " + command);
+                } else {
+                    String shell = pwshAvailable() ? "pwsh" : "powershell";
+                    String prefix = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; ";
+                    pb.command(shell, "-NoProfile", "-NonInteractive", "-Command", prefix + command.replace("&&", ";"));
+                }
             } else {
                 pb.command("sh", "-c", command);
             }
@@ -98,7 +126,7 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             StringBuilder stderr = new StringBuilder();
 
             Thread stdoutThread = new Thread(() -> {
-                try (var reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                try (var reader = new BufferedReader(new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         stdout.append(line).append("\n");
@@ -109,7 +137,7 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             });
 
             Thread stderrThread = new Thread(() -> {
-                try (var reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                try (var reader = new BufferedReader(new java.io.InputStreamReader(process.getErrorStream(), java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         stderr.append(line).append("\n");

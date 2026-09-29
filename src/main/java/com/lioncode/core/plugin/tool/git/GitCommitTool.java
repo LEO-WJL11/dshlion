@@ -55,7 +55,12 @@ public class GitCommitTool extends AbstractToolPlugin {
             }
 
             // 执行git commit
-            ProcessBuilder pb = new ProcessBuilder(gitExecutable(), "commit", "-m", message);
+            // 新机器上没配 user.name/user.email 时 git commit 会直接失败
+        // （"Please tell me who you are"）。带一组本地兜底身份，别让用户先手动配置。
+        ProcessBuilder pb = new ProcessBuilder(gitExecutable(),
+            "-c", "user.name=LionBox Agent",
+            "-c", "user.email=agent@lionbox.local",
+            "commit", "-m", message);
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
 

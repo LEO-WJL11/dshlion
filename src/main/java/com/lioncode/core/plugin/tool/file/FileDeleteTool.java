@@ -62,15 +62,23 @@ public class FileDeleteTool extends AbstractToolPlugin {
                 if (recursive) {
                     try (var walk = Files.walk(target)) {
                         walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            // Windows 上 .git 里的对象/索引是只读的，直接删会失败
+                            // （实测：删含 .git 的目录报"部分内容删不掉"）。先清只读再删一次。
                             try {
                                 Files.delete(p);
-                            } catch (IOException ignored) {
-                                // 单个删不掉就跳过，最后统一看是否还在
+                            } catch (IOException first) {
+                                try {
+                                    p.toFile().setWritable(true);
+                                    Files.delete(p);
+                                } catch (IOException ignored) {
+                                    // 还是删不掉就跳过，最后统一看是否还在
+                                }
                             }
                         });
                     }
                     if (Files.exists(target)) {
-                        return error("删除失败（部分内容删不掉）: " + path);
+                        return error("删除失败（部分内容删不掉，可能被占用或权限不足）: " + path
+                            + "。可以改用 execute_command 跑 Remove-Item -Recurse -Force。");
                     }
                     return success("已递归删除目录: " + path);
                 }

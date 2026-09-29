@@ -76,7 +76,7 @@ public class FileSearchTool extends AbstractToolPlugin {
                     .filter(p -> matcher.matches(p.getFileName()))
                     .forEach(file -> {
                         try {
-                            List<String> lines = Files.readAllLines(file);
+                            List<String> lines = readTextLines(file);
                             for (int i = 0; i < lines.size(); i++) {
                                 if (searchPattern.matcher(lines.get(i)).find()) {
                                     String relative = searchDir.relativize(file).toString();

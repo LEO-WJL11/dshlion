@@ -34,7 +34,9 @@
 ;          目录不存在被误报成没装 git）+ delete_file 支持 recursive + 工具名写错给候选
 ; 1.1.12：number_convert 认进制名（dec/hex/bin/oct）、word_count 传目录给明确错误、
 ;          stop_background 列出可用 pid、ask_user 超时下限 30 秒、补上 git_reset
-#define AppVersion     "1.1.12"
+; 1.1.13：GBK 文件读取容错（Input length = 1）、含只读文件的目录递归删除、
+;          cmd/PowerShell 命令分流 + 输出 UTF-8、move/copy 参数别名、git_commit 兜底身份
+#define AppVersion     "1.1.13"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

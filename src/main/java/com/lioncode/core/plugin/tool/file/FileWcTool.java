@@ -43,7 +43,7 @@ public class FileWcTool extends AbstractToolPlugin {
             if (!Files.exists(Path.of(path))) {
                 return error("文件不存在: " + path);
             }
-            String content = Files.readString(Path.of(path));
+            String content = readTextFile(Path.of(path));
             long lines = content.chars().filter(c -> c == '\n').count() + 1;
             long words = content.split("\\s+").length;
             long bytes = content.getBytes().length;
