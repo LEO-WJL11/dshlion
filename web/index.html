@@ -650,6 +650,11 @@ var App = {
     /**
      * 渲染工作区选项卡：每个工作区一行表头（可点开/收起），
      * 展开后列出属于它的对话；每行对话右边有个小下拉可以改工作区。
+     *
+     * <p>**没有对话的工作区不显示**（只是不占列表位置，文件夹和注册都不动）。
+     * 以前为了能在空工作区里建对话而把它们全列出来，结果历史遗留的
+     * 空壳工作区把列表撑满了；而且顶栏「选择」挑完文件夹会立刻在里面
+     * 建一个会话，真用过的工作区本来就至少有 1 个。
      */
     renderSessionTabs: function(sessions, workspaces) {
         var self = this;
@@ -665,11 +670,11 @@ var App = {
             if (!groups[k]) { groups[k] = []; order.push(k); }
             groups[k].push(s);
         });
-        // 还没有对话的工作区也要显示（否则没法在里面新建对话）
-        workspaces.forEach(function(w) {
-            var k = w.path || w.workspaceId;
-            if (k && !groups[k]) { groups[k] = []; order.push(k); }
-        });
+        // 注意：这里**不再**把没有对话的工作区加进来。
+        // workspaces（/api/workspaces）仍然全部保留，只是不在对话列表里占位：
+        //   · 对话右边的「选工作区」下拉仍然列全部工作区，想把对话挪进去照样可以；
+        //   · 挪进去之后那个工作区自然就出现了。
+        // （用户要的就是这个：没对话就删掉显示 —— 不是删文件夹。）
         // 当前对话所在工作区排最前
         var cur = sessions.filter(function(x) { return x.sessionId === self.sessionId; })[0];
         if (cur && cur.workspaceId && order.indexOf(cur.workspaceId) > 0) {
@@ -684,8 +689,9 @@ var App = {
         if (clearBtn) clearBtn.disabled = sessions.length === 0;
 
         if (!order.length) {
-            list.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:20px">还没有工作区<br>' +
-                '<span style="font-size:11px">先点上面「选择」加一个工作区</span></div>';
+            // 一个对话都没有时，不列任何工作区（含以前用过、现在空的）
+            list.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:20px">还没有对话<br>' +
+                '<span style="font-size:11px">点上面「选择」挑个工作区，或直接「＋ 新建对话」</span></div>';
             return;
         }
 
@@ -707,9 +713,6 @@ var App = {
                  +  '</div>';
             if (!isCollapsed) {
                 html += '<div class="ws-body">';
-                if (!items.length) {
-                    html += '<div class="ws-empty">这个工作区还没有对话</div>';
-                }
                 items.forEach(function(s) {
                     var active = s.sessionId === self.sessionId ? ' active' : '';
                     var unnamed = !(s.name && s.name.trim());

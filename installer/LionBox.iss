@@ -49,7 +49,8 @@
 ; 1.2.1：侧栏加「清空所有对话」按钮（两次确认，工作区保留）+ DELETE /api/sessions
 ; 1.2.2：修「安装时选了 IQ4，启动却跑 Q8_0」——启动时改为「先认你选的 → 缺了就下它 → 实在下不来才兜底」，
 ;         并且界面如实说明在用哪个、为什么不是你要的那个；设置页可直接点「立即下载并切换」
-#define AppVersion     "1.2.2"
+; 1.2.3：对话列表里**没有对话的工作区不再显示**（只是不占位置，工作区注册和磁盘文件夹都不动）
+#define AppVersion     "1.2.3"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
