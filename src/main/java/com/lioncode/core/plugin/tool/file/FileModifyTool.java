@@ -116,7 +116,8 @@ public class FileModifyTool extends AbstractToolPlugin {
                 }
             }
 
-            Files.write(filePath, lines);
+            // 按文件原本的编码写回：GBK 的仍是 GBK，不会被悄悄改成 UTF-8
+            Files.write(filePath, lines, charsetOf(filePath));
             return success("文件已修改: " + path + " (操作: " + operation + ")");
 
         } catch (IOException e) {

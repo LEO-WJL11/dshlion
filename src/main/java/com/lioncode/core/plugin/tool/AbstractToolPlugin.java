@@ -183,6 +183,39 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
         return lines;
     }
 
+    /**
+     * 认出这个文件原本是什么编码（UTF-8 还是 GBK）。
+     *
+     * <p>读的时候用 {@link #decodeText} 容错，写回去时必须用**同一个编码** ——
+     * 否则记事本存的 ANSI 中文文件被改一次就变成 UTF-8（内容不乱，但编码被悄悄换了，
+     * 老工具/批处理可能就读不了）。文件不存在或空文件按 UTF-8。
+     */
+    protected static java.nio.charset.Charset charsetOf(java.nio.file.Path path) {
+        try {
+            if (!java.nio.file.Files.exists(path)) {
+                return java.nio.charset.StandardCharsets.UTF_8;
+            }
+            byte[] bytes = java.nio.file.Files.readAllBytes(path);
+            if (bytes.length == 0) {
+                return java.nio.charset.StandardCharsets.UTF_8;
+            }
+            // 能按 UTF-8 严格解出来就当 UTF-8，否则按 GBK（同 decodeText 的判据）
+            java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes));
+            return java.nio.charset.StandardCharsets.UTF_8;
+        } catch (Exception notUtf8) {
+            return java.nio.charset.Charset.forName("GBK");
+        }
+    }
+
+    /** 按文件原有编码写回（不存在则 UTF-8）。 */
+    protected void writeTextPreservingCharset(java.nio.file.Path path, String content)
+            throws java.io.IOException {
+        java.nio.file.Files.writeString(path, content, charsetOf(path));
+    }
+
     /** 容错读整个文本文件（同上）。 */
     protected String readTextFile(java.nio.file.Path path) throws java.io.IOException {
         return decodeText(java.nio.file.Files.readAllBytes(path));

@@ -35,7 +35,8 @@ public class FileAppendTool extends AbstractToolPlugin {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             String content = getRequiredStringArg(arguments, "content");
-            Files.writeString(Path.of(path), content, 
+            // 追加也用文件原本的编码：GBK 的中文文件追加之后仍是 GBK，不会变成混合编码
+            Files.writeString(Path.of(path), content, charsetOf(Path.of(path)),
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             return success("内容已追加到: " + path);
         } catch (Exception e) {

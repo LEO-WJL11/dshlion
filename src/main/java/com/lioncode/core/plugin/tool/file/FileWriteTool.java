@@ -57,7 +57,8 @@ public class FileWriteTool extends AbstractToolPlugin {
                 Files.createDirectories(filePath.getParent());
             }
 
-            Files.writeString(filePath, content);
+            // 覆盖已有文件时保留它原来的编码（新文件用 UTF-8）
+            Files.writeString(filePath, content, charsetOf(filePath));
             log.debug("写入文件: {} ({}字节)", path, content.length());
             return success("文件已写入: " + path + " (" + content.length() + "字节)");
 

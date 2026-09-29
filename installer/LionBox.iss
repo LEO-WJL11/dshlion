@@ -43,7 +43,8 @@
 ;          GIT_TERMINAL_PROMPT=0）、先 waitFor 再读输出、派发层加工具超时兜底
 ; 1.1.17：git_remote 支持 get-url/set-url；execute_command 把 Unix 写法翻成 PowerShell
 ;          （ls -la / rm -rf / cp -r / mkdir -p / grep / touch / which / ps aux 等）
-#define AppVersion     "1.1.17"
+; 1.1.18：写文件保留原编码（GBK 的 ANSI 中文文件改完仍是 GBK，不会被悄悄转成 UTF-8）
+#define AppVersion     "1.1.18"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
