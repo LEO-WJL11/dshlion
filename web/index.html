@@ -1218,8 +1218,21 @@ var App = {
         ]).then(function(res) {
             var d = (res[0] && res[0].success && res[0].data) ? res[0].data : {};
             var models = (res[1] && res[1].success && res[1].data) ? res[1].data : [];
+            // 还没启动过运行时的话，“正在用”谁都不该标；这时候配置的那个只是“当前选择”，
+            // 不能写成“已选中但没在用”（那会让人以为跑着呢、只是跑错了）。
+            var hasCurrent = models.some(function(m) { return m.current; });
 
-            var html = '<p style="color:#a0a0b8;margin-bottom:14px;font-size:12px;line-height:1.7">'
+            var html = '';
+            // 配置的模型和实际在用的不一致时（例如选的量化还没下载），明确提示
+            if (d.modelMismatch) {
+                html += '<div style="border:1px solid #e17055;background:#2a1f1c;border-radius:8px;'
+                     +  'padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:#ffb8a3">'
+                     +  '⚠️ ' + self.escapeHtml(d.modelMismatch)
+                     +  '<div style="margin-top:8px">'
+                     +  '<button class="btn btn-sm" onclick="App.switchLlamaModel(\''
+                     +  self.escapeAttr(d.modelFile) + '\')">立即下载并切换</button></div></div>';
+            }
+            html += '<p style="color:#a0a0b8;margin-bottom:14px;font-size:12px;line-height:1.7">'
                 + '这里改的是<b style="color:#e8e8f0">本机 llama.cpp 的启动参数</b>（随盒子一起跑的那个推理进程）。'
                 + '改完点保存，然后<b style="color:#e8e8f0">重启本地模型</b>才会生效。<br>'
                 + '拿不准的项就别动，默认值都是按这台机器调过的。</p>';
@@ -1234,7 +1247,13 @@ var App = {
                 html += '<tr style="border-bottom:1px solid #23233a">'
                      +    '<td style="padding:7px 4px">'
                      +      '<div style="color:#e8e8f0">' + self.escapeHtml(m.label)
-                     +        (m.current ? ' <span style="color:#6c5ce7">· 当前</span>' : '') + '</div>'
+                     +        (m.current ? ' <span style="color:#6c5ce7">· 正在用</span>' : '')
+                     +        (!m.current && m.configured
+                                  ? (hasCurrent
+                                      ? ' <span style="color:#e17055">· 已选中但没在用</span>'
+                                      : ' <span style="color:#6c5ce7">· 当前选择（还没启动）</span>')
+                                  : '')
+                     +        '</div>'
                      +      '<div style="color:#6a6a80;font-size:11px">' + self.escapeHtml(m.note) + '</div>'
                      +      '<div style="color:#6a6a80;font-size:11px">' + m.sizeGb + ' GB · '
                      +        (m.downloaded ? '已下载' : '未下载') + '</div>'
@@ -1527,9 +1546,9 @@ var App = {
             html += '<button class="btn" onclick="App.unloadLocalModel()">卸载模型（释放显存）</button>';
             html += '<div id="warmupStatus" style="margin-top:8px;font-size:12px;color:#6a6a80"></div>';
             html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80">'
-                 +  '权重不随安装包分发：安装目录里还没有模型文件时，<b>点「下载模型」或直接发第一条消息</b>'
-                 +  '都会自动从 ModelScope 拉取（约 8.9GB，只下一次）。<br>'
-                 +  '不用手动点：软件启动时不会加载模型，你发出第一条消息时才自动加载。'
+                 +  '权重不随安装包分发：你在下面选了哪份，软件一启动就在<b>后台自动下那一份</b>'
+                 +  '（不占显存，进度看顶部横幅；也可以点「下载模型」手动催）。<br>'
+                 +  '没下完也不耽误聊天：会先用目录里现成的那份，并在上面如实说明用的是哪份。'
                  +  '如果用自定义 API，本地模型永远不会被加载。<br>'
                  +  '<b>纯 CPU 推理时建议点一次「预热提示词」</b>：它会把系统提示词和工具定义'
                  +  '的前缀缓存提前算好，这样你的第一条消息不用等预填充（顺便实测出预填充速度）。</div>';
@@ -1616,7 +1635,7 @@ var App = {
             if (st.lastError) {
                 return '<span style="color:#e17055">✗ 模型没能就绪：' + st.lastError + '</span>';
             }
-            return '<span style="color:#fdcb6e">○ 模型尚未下载（约 8.9GB，只下一次）</span>'
+            return '<span style="color:#fdcb6e">○ 模型尚未下载（只下一次）</span>'
                  + '<span style="color:#6a6a80"> —— 发第一条消息会自动开始下载，'
                  + '也可以点下面的「下载模型」先下好</span>';
         }
@@ -1626,7 +1645,7 @@ var App = {
         }
         if (st.starting) {
             return '<span style="color:#fdcb6e">⏳ 正在加载模型…</span>'
-                 + '<span style="color:#6a6a80"> 8.9GB 首次加载约 30~90 秒</span>';
+                 + '<span style="color:#6a6a80"> 首次加载约 30~90 秒</span>';
         }
         if (st.lastError) {
             return '<span style="color:#e17055">✗ 上次启动失败：' + st.lastError + '</span>';
@@ -1761,7 +1780,7 @@ var App = {
     downloadLocalModel: function() {
         var box = document.getElementById('localStatus');
         box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在从 ModelScope 下载权重…'
-                      + '（约 8.9GB，只下一次；进度见 logs/lion-code.log）</span>';
+                      + '（只下一次，不占显存；体积见下面「模型版本」）</span>';
         fetch('/api/runtime/local/download', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
@@ -1784,7 +1803,7 @@ var App = {
 
     loadLocalModel: function() {
         var box = document.getElementById('localStatus');
-        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在加载模型…（8.9GB，约 30~90 秒）</span>';
+        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在加载模型…（首次约 30~90 秒）</span>';
         fetch('/api/runtime/local/start', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
@@ -1824,9 +1843,29 @@ var App = {
                 var dot = st.running ? '<span style="color:#00b894">●</span>'
                                      : '<span style="color:#6a6a80">○</span>';
                 var txt = st.running ? '已加载' : '未加载';
+                // 正在下载你选的那份权重时，横幅里直接报进度，
+                // 不然用户只看到“未加载”，以为没动静。
+                if (st.phase === 'downloading') {
+                    var dmb = Math.floor((st.downloadBytes || 0) / 1048576);
+                    txt = st.downloadTotal > 0
+                        ? '正在下载 ' + Math.floor((st.downloadBytes || 0) * 100 / st.downloadTotal)
+                          + '%（' + dmb + '/' + Math.floor(st.downloadTotal / 1048576) + ' MB）'
+                        : '正在下载（已下 ' + dmb + ' MB）';
+                    dot = '<span style="color:#fdcb6e">●</span>';
+                }
                 el.innerHTML = dot + ' 本地模型：' + (d.model || '')
                              + ' <span style="color:#6a6a80">' + txt + ' · 切换 ▾</span>';
                 el.title = (d.baseUrl || '') + '（点击切换模型来源）';
+                // 下载中就自己再查一次，否则百分比不会动
+                if (st.phase === 'downloading' && !App._dlTimer) {
+                    App._dlTimer = setInterval(function() {
+                        App.refreshRuntimeBanner();
+                    }, 3000);
+                } else if (st.phase !== 'downloading' && App._dlTimer) {
+                    clearInterval(App._dlTimer);
+                    App._dlTimer = null;
+                    if (App.fillModelsFromConfig) { App.fillModelsFromConfig(); }
+                }
             }
         });
     },

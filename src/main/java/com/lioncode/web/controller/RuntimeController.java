@@ -210,6 +210,21 @@ public class RuntimeController {
         data.put("running", localRuntime.isRunning());
         data.put("status", localRuntime.status());
         data.put("stored", configStore.llamaConfig());
+        // 配置的模型和**实际在用的**可能不一样（配置的还没下载时会临时用别的），
+        // 如实报三个字段，界面才能讲清楚，而不是悄悄用错的那个。
+        //   modelFile          = 配置里选的
+        //   modelInUse         = 真在用的（还没启动过就是空串，绝不假报成配置的那个）
+        //   configuredDownloaded = 配置的那份权重本机有没有
+        String configured = String.valueOf(localRuntime.effectiveConfig().get("modelFile"));
+        String inUse = localRuntime.modelFileInUse();
+        data.put("modelInUse", inUse == null ? "" : inUse);
+        boolean downloaded = localRuntime.isModelDownloaded(configured);
+        data.put("configuredDownloaded", downloaded);
+        String notice = localRuntime.modelMismatchNotice();
+        if (notice.isEmpty() && !downloaded) {
+            notice = "你选的是 " + configured + "，本机还没有这份权重（首次启动或点下面的按钮会自动下载）";
+        }
+        data.put("modelMismatch", notice);
         return ApiResponse.ok(data);
     }
 
@@ -234,13 +249,17 @@ public class RuntimeController {
     public ApiResponse<List<Map<String, Object>>> localModels() {
         List<Map<String, Object>> list = new java.util.ArrayList<>();
         String current = localRuntime.effectiveModelFile();
+        // 实际在用的：**没启动过就是空**，不能拿"配置里选的"顶上 ——
+        // 否则界面会把用户选的 IQ4 标成"正在用"，而他实际跑的可能是兜底的 Q8。
+        String inUseNow = localRuntime.modelFileInUse();
         for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("file", c.file());
             m.put("label", c.label());
             m.put("sizeGb", c.sizeGb());
             m.put("note", c.note());
-            m.put("current", c.file().equals(current));
+            m.put("current", c.file().equals(inUseNow));             // 实际在用的
+            m.put("configured", c.file().equals(current));          // 配置里选的
             m.put("downloaded", localRuntime.isModelDownloaded(c.file()));
             list.add(m);
         }

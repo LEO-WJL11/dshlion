@@ -228,6 +228,12 @@ public class LocalModelRuntime {
     @Value("${lionbox.runtime.model-repo:lionnezha/lion-models}")
     private String modelRepo;
 
+    // 下载源前缀。默认就是 ModelScope；做成可配置主要是为了两件事：
+    //   1) 自测时指向本地假服务器，验证"确实去下了用户选的那个量化"；
+    //   2) 哪天要换镜像站（下载慢的时候），改配置即可，不必重编译。
+    @Value("${lionbox.runtime.model-base-url:https://modelscope.cn}")
+    private String modelBaseUrl;
+
     @Value("${lionbox.runtime.model-revision:master}")
     private String modelRevision;
 
@@ -301,6 +307,26 @@ public class LocalModelRuntime {
         return healthy();
     }
 
+    /** 当前**实际在用**的模型文件名（可能因为兜底和配置的不一样） */
+    public String modelFileInUse() {
+        return modelInUse.get();
+    }
+
+    /**
+     * 配置的模型还没就位时，给界面一句能看懂的话；一切正常则返回空串。
+     * 例：「你选的是 lion-merged-IQ4_XS.gguf，但它还没下载，现在临时用 lion-merged-Q8_0.gguf」。
+     */
+    public String modelMismatchNotice() {
+        String inUse = modelInUse.get();
+        String configured = effectiveModelFile();
+        if (inUse == null || inUse.isEmpty() || configured == null || inUse.equals(configured)) {
+            return "";
+        }
+        return "你选的是 " + configured + "，但" +
+            (isModelDownloaded(configured) ? "" : "它还没下载，") +
+            "现在临时在用 " + inUse;
+    }
+
     /** 当前状态快照，给前端和 /api/runtime/local 用 */
     public Status status() {
         return new Status(
@@ -312,9 +338,11 @@ public class LocalModelRuntime {
             host,
             port,
             modelName,
-            modelFile,
+            effectiveModelFile(),
             resolvesExe() == null ? "" : resolvesExe().toString(),
-            resolvesModel() == null ? "" : resolvesModel().toString(),
+            modelInUse.get().isEmpty()
+                ? (resolvesModel() == null ? "" : resolvesModel().toString())
+                : modelInUse.get(),
             logFile() == null ? "" : logFile().toString(),
             lastError.get(),
             downloadBytes,
@@ -361,10 +389,22 @@ public class LocalModelRuntime {
                 return true;
             }
             Path exe = resolvesExe();
-            Path model = resolvesModel();
+            // 【顺序要紧】先找**配置的那一个**；没有就下载它；实在下不来才退回目录里现成的。
+            // 以前这里调的是 resolvesModel()（会兜底返回任意 .gguf），
+            // 导致"用户在安装时选了 IQ4_XS"永远走不到下载分支，启动的还是老的 Q8_0。
+            Path model = configuredModelPath();
+            modelIsFallback.set(false);
             if (exe != null && model == null) {
-                // 权重不在 → 首次运行自动下载（安装包不内置 8.9GB 权重）
                 model = downloadModelIfAllowed();
+            }
+            if (model == null) {
+                model = resolvesModel();          // 下载失败/关闭了自动下载：退现成的
+                if (model != null) {
+                    modelIsFallback.set(true);
+                }
+            }
+            if (model != null) {
+                modelInUse.set(model.getFileName().toString());
             }
             if (exe == null || model == null) {
                 lastError.set("找不到本地模型运行时或模型文件");
@@ -495,6 +535,42 @@ public class LocalModelRuntime {
     // 模型自动下载（ModelScope）
     // ------------------------------------------------------------------
 
+    /** 同一时刻只允许一个下载（开机后台下载和第一条消息可能同时来抢）。 */
+    private final java.util.concurrent.atomic.AtomicBoolean downloadingNow =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 开机后把"用户选的那份权重"在后台补齐。
+     *
+     * <p>为什么不在第一条消息时才下：用户装的时候选了 IQ4_XS（4.87 GB），
+     * 那份不可能塞进安装包，只能下。要是等他发第一条消息时才下，那条消息就得干等十几分钟，
+     * 看起来就是"卡死了"。放这儿下：不加载模型、不占显存，进度显示在顶部横幅上；
+     * 这期间聊天照样能用（会先用目录里现成的那份，并如实说明用的是哪份）。
+     */
+    @org.springframework.context.event.EventListener(
+        org.springframework.context.event.ContextRefreshedEvent.class)
+    public void fetchConfiguredModelOnStartup() {
+        if (!autoDownload) {
+            return;
+        }
+        if (configStore != null && !configStore.isLocalMode()) {
+            return;                                   // 用户在用自定义 API，别偷偷占 5 GB 硬盘
+        }
+        if (resolvesExe() == null) {
+            return;                                   // 没装本地运行时，本地模型用不上
+        }
+        if (configuredModelPath() != null) {
+            return;                                   // 已经有了，不折腾
+        }
+        Thread t = new Thread(() -> {
+            log.info("你选的模型 {} 本机还没有，后台开始下载（不占显存，进度见界面）",
+                effectiveModelFile());
+            downloadModelIfAllowed();
+        }, "lionbox-model-fetch");
+        t.setDaemon(true);
+        t.start();
+    }
+
     /** 权重不在就自动下载；下不了就返回 null，让上层走原有的报错路径。 */
     private Path downloadModelIfAllowed() {
         if (!autoDownload) {
@@ -502,21 +578,29 @@ public class LocalModelRuntime {
                 effectiveModelFile());
             return null;
         }
-        Path target = downloadTarget();
-        if (target == null) {
-            log.error("找不到可写目录来存放模型权重");
+        if (!downloadingNow.compareAndSet(false, true)) {
+            log.info("已有一个下载在进行中，这次不重复下");
             return null;
         }
         try {
-            phase.set("downloading");
-            downloadModel(target);
-            phase.set("idle");
-            return resolvesModel();
-        } catch (Exception e) {
-            phase.set("failed");
-            lastError.set("自动下载模型失败：" + e.getMessage());
-            log.error("自动下载模型失败: {}", e.getMessage());
-            return null;
+            Path target = downloadTarget();
+            if (target == null) {
+                log.error("找不到可写目录来存放模型权重");
+                return null;
+            }
+            try {
+                phase.set("downloading");
+                downloadModel(target);
+                phase.set("idle");
+                return resolvesModel();
+            } catch (Exception e) {
+                phase.set("failed");
+                lastError.set("自动下载模型失败：" + e.getMessage());
+                log.error("自动下载模型失败: {}", e.getMessage());
+                return null;
+            }
+        } finally {
+            downloadingNow.set(false);
         }
     }
 
@@ -590,7 +674,7 @@ public class LocalModelRuntime {
     private void downloadModel(Path target) throws IOException, InterruptedException {
         Path part = target.resolveSibling(target.getFileName() + ".part");
         long already = Files.isRegularFile(part) ? Files.size(part) : 0L;
-        String url = "https://modelscope.cn/api/v1/models/" + modelRepo + "/repo?Revision="
+        String url = modelBaseUrl + "/api/v1/models/" + modelRepo + "/repo?Revision="
             + modelRevision + "&FilePath=" + URLEncoder.encode(effectiveModelFile(), StandardCharsets.UTF_8);
 
         HttpClient client = HttpClient.newBuilder()
@@ -672,6 +756,36 @@ public class LocalModelRuntime {
         log.info("模型下载完成：{}（{} MB）", target, size / 1024 / 1024);
     }
 
+    /** 实际这次启动用的模型文件（兜底时会和配置的不一样，界面要如实显示） */
+    private final java.util.concurrent.atomic.AtomicReference<String> modelInUse =
+        new java.util.concurrent.atomic.AtomicReference<>("");
+
+    /** 这次启动用的是不是兜底的模型（配置的那个没找到） */
+    private final java.util.concurrent.atomic.AtomicBoolean modelIsFallback =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * 只要**配置里那一个**模型文件；没有就返回 null（让调用方去下载）。
+     *
+     * <p>为什么不能在这里"随便拿一个现成的"：用户可以在安装时/设置里选量化版本，
+     * 一兜底他的选择就白选了 —— 实测"选了 IQ4_XS，启动还是 Q8_0"就是这么来的。
+     */
+    private Path configuredModelPath() {
+        if (modelPath != null && !modelPath.isBlank()) {
+            Path p = Path.of(modelPath);
+            return Files.isRegularFile(p) ? p : null;
+        }
+        for (Path dir : appDirs()) {
+            for (Path base : new Path[] {dir, dir.resolve("models")}) {
+                Path p = base.resolve(effectiveModelFile());
+                if (Files.isRegularFile(p)) {
+                    return p;
+                }
+            }
+        }
+        return null;
+    }
+
     private Path resolvesModel() {
         if (modelPath != null && !modelPath.isBlank()) {
             Path p = Path.of(modelPath);
@@ -688,7 +802,8 @@ public class LocalModelRuntime {
                 // 直接用目录里现成的 .gguf，并把换了哪个文件写进日志。
                 Path any = pickAnyGguf(base);
                 if (any != null) {
-                    log.warn("未找到配置的模型 {}，自动改用 {}", effectiveModelFile(), any.getFileName());
+                    log.warn("配置的模型 {} 不可用，暂时改用现成的 {}（可在设置里下载配置的那个）",
+                        effectiveModelFile(), any.getFileName());
                     return any;
                 }
             }

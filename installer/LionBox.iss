@@ -47,7 +47,9 @@
 ; 1.2.0（功能版）：安装时可选模型版本（Q8_0/Q4_K_M/IQ4_XS）；设置页可改 llama.cpp 全部参数；
 ;                 对话列表按工作区分组成可收起的选项卡，每个对话能选工作区
 ; 1.2.1：侧栏加「清空所有对话」按钮（两次确认，工作区保留）+ DELETE /api/sessions
-#define AppVersion     "1.2.1"
+; 1.2.2：修「安装时选了 IQ4，启动却跑 Q8_0」——启动时改为「先认你选的 → 缺了就下它 → 实在下不来才兜底」，
+;         并且界面如实说明在用哪个、为什么不是你要的那个；设置页可直接点「立即下载并切换」
+#define AppVersion     "1.2.2"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
