@@ -151,9 +151,7 @@
             <div class="section-title">工作模式</div>
             <div class="mode-selector">
                 <button class="mode-btn active" data-mode="STANDARD" onclick="App.setMode(this,'STANDARD')">标准</button>
-                <button class="mode-btn" data-mode="PTC" onclick="App.setMode(this,'PTC')">PTC</button>
-                <button class="mode-btn" data-mode="CREATIVE" onclick="App.setMode(this,'CREATIVE')">创造</button>
-                <button class="mode-btn" data-mode="MINIMAL" onclick="App.setMode(this,'MINIMAL')">极简</button>
+                                <button class="mode-btn" data-mode="MINIMAL" onclick="App.setMode(this,'MINIMAL')">极简</button>
             </div>
         </div>
         <div class="sidebar-footer">
@@ -877,6 +875,8 @@ var App = {
     // 仅更新界面高亮（恢复历史会话时使用）
     setModeUi: function(mode) {
         document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
+        // 现在只有标准/极简；老会话里存着 PTC/CREATIVE 的，高亮落回「标准」
+        if (mode !== 'STANDARD' && mode !== 'MINIMAL') { mode = 'STANDARD'; }
         var btn = document.querySelector('.mode-btn[data-mode="' + mode + '"]');
         if (btn) btn.classList.add('active');
     },

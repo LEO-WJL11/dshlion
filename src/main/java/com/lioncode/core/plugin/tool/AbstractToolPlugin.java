@@ -59,11 +59,13 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
                 || cat == ToolCategory.FILE_MODIFY
                 || cat == ToolCategory.SHELL;
         }
-        // 创造模式下可用工具取决于具体工具
+        // 创造模式（已不再开放给用户）下所有工具可用 ——
+        // 现在只剩标准和极简，PTC/CREATIVE 在 AgentMode.normalize() 就被归一成标准了，
+        // 这两条留着是为了老会话、老配置不会因为少了个分支而出意外。
         if (mode == AgentMode.CREATIVE) {
             return true;
         }
-        // 标准和PTC模式下所有工具可用
+        // 标准模式（含由 PTC 归一过来的）：所有工具可用
         return true;
     }
 

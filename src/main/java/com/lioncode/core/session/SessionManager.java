@@ -57,10 +57,11 @@ public class SessionManager {
 
         String sessionId = UUID.randomUUID().toString();
         // name 留空：等用户在会话里发出第一条消息后由 SessionTitleService 生成标题
-        Session session = new Session(sessionId, workspaceId, mode, Instant.now(), null);
+        AgentMode effective = AgentMode.normalize(mode);
+        Session session = new Session(sessionId, workspaceId, effective, Instant.now(), null);
         sessions.put(sessionId, session);
-        modeOverrides.put(sessionId, mode);
-        log.info("新会话已创建: {} - 工作区: {}, 模式: {}", sessionId, workspaceId, mode.getCode());
+        modeOverrides.put(sessionId, effective);
+        log.info("新会话已创建: {} - 工作区: {}, 模式: {}", sessionId, workspaceId, effective.getCode());
         return session;
     }
 
@@ -76,11 +77,19 @@ public class SessionManager {
      */
     public Session restoreSession(String sessionId, String workspaceId, AgentMode mode, Instant createdAt,
                                   String name) {
-        Session session = new Session(sessionId, workspaceId, mode, createdAt, name);
+        // 老会话里可能是 PTC/CREATIVE（现在不给用户选了）—— 加载时归一成标准模式
+        AgentMode effective = AgentMode.normalize(mode);
+        if (effective != mode) {
+            log.info("会话 {} 的模式 {} 已不再开放，按标准模式恢复", sessionId,
+                mode == null ? "null" : mode.getCode());
+        }
+        Session session = new Session(sessionId, workspaceId, effective, createdAt, name);
         sessions.put(sessionId, session);
-        modeOverrides.put(sessionId, mode);
+        // 这里必须是 effective：modeOverrides 的优先级比 Session.mode() 高，
+        // 存归一前的值等于让 PTC/CREATIVE 从后门继续生效。
+        modeOverrides.put(sessionId, effective);
         log.info("会话已从磁盘恢复: {} - 工作区: {}, 模式: {}, 名称: {}",
-            sessionId, workspaceId, mode.getCode(), name == null ? "(未命名)" : name);
+            sessionId, workspaceId, effective.getCode(), name == null ? "(未命名)" : name);
         return session;
     }
 
@@ -165,6 +174,7 @@ public class SessionManager {
      * 运行时切换会话的工作模式（立即生效，后续消息按新模式处理）
      */
     public boolean updateMode(String sessionId, AgentMode mode) {
+        mode = AgentMode.normalize(mode);
         Session session = sessions.get(sessionId);
         if (session == null) {
             log.warn("切换模式失败，会话不存在: {}", sessionId);

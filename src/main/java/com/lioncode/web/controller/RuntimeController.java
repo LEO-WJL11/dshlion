@@ -520,9 +520,10 @@ public class RuntimeController {
         }
         com.lioncode.core.agent.AgentMode mode;
         try {
-            mode = com.lioncode.core.agent.AgentMode.valueOf(modeName.trim().toUpperCase());
+            // 只留标准和极简：老名字（ptc / creative）归一成标准，别再让它们绕过去
+            mode = com.lioncode.core.agent.AgentMode.fromName(modeName);
         } catch (Exception e) {
-            return new ApiResponse<>(false, "未知模式: " + modeName, null, null);
+            return new ApiResponse<>(false, "未知模式: " + modeName + "（只有 standard / minimal）", null, null);
         }
         String ws = workspace == null || workspace.isBlank()
             ? System.getProperty("user.dir")

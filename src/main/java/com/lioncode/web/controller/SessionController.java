@@ -60,13 +60,18 @@ public class SessionController {
     @PostMapping
     public ApiResponse<SessionDto> createSession(@RequestBody CreateSessionRequest request) {
         try {
-            var mode = AgentMode.valueOf(request.mode());
+            // 现在只有标准和极简两种；PTC/创造会被归一成标准（老前端不会报错），
+            // 不认识的名字会抛 IllegalArgumentException —— 以前这里只 catch 了
+            // IllegalStateException，填错名字直接 500。
+            var mode = AgentMode.fromName(request.mode());
             var session = sessionManager.createSession(request.workspaceId(), mode);
             // 持久化会话元数据，重启后自动恢复
             sessionPersistence.saveSession(session);
             SessionDto dto = new SessionDto(session.sessionId(), session.workspaceId(),
                 session.mode().getCode(), session.createdAt(), null, session.name());
             return ApiResponse.ok("会话创建成功", dto);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.error("无效的工作模式: " + request.mode() + "（只有 STANDARD / MINIMAL）");
         } catch (IllegalStateException e) {
             return ApiResponse.error(e.getMessage());
         }
@@ -177,7 +182,7 @@ public class SessionController {
             return ApiResponse.error("会话不存在: " + sessionId);
         }
         try {
-            AgentMode mode = AgentMode.valueOf(request.mode());
+            AgentMode mode = AgentMode.fromName(request.mode());
             if (sessionManager.updateMode(sessionId, mode)) {
                 // 用新模式重建元数据并持久化
                 sessionManager.getSession(sessionId).ifPresent(s ->
@@ -187,7 +192,7 @@ public class SessionController {
             }
             return ApiResponse.error("模式切换失败");
         } catch (IllegalArgumentException e) {
-            return ApiResponse.error("无效的工作模式: " + request.mode());
+            return ApiResponse.error("无效的工作模式: " + request.mode() + "（只有 STANDARD / MINIMAL）");
         }
     }
 
