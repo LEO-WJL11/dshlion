@@ -46,6 +46,44 @@ public class ShellExecuteTool extends AbstractToolPlugin {
     }
 
     /**
+     * 把常见的 Unix 写法翻成 PowerShell 等价写法。
+     *
+     * <p>实测：模型写 {@code echo hello && ls -la}，PowerShell 报
+     * "Get-ChildItem : 找不到与参数名称"la"匹配的参数"。这类 Unix 开关在 PowerShell 里
+     * **永远不可能合法**，所以按模式翻译是安全的（只翻确定的几种，不做通用猜测）。
+     */
+    static String unixToPowerShell(String command) {
+        if (command == null || command.isBlank()) {
+            return command;
+        }
+        String c = command;
+        // ls -la / ls -l / ls -al / ll → 列全部文件
+        c = c.replaceAll("\\bll\\b", "ls -Force");
+        c = c.replaceAll("\\bls\\s+-[a-zA-Z]*l[a-zA-Z]*(\\s|$)", "ls -Force$1");
+        c = c.replaceAll("\\bls\\s+-a(\\s|$)", "ls -Force$1");
+        // rm -rf / rm -f / rm -r
+        c = c.replaceAll("\\brm\\s+-rf\\b", "Remove-Item -Recurse -Force");
+        c = c.replaceAll("\\brm\\s+-fr\\b", "Remove-Item -Recurse -Force");
+        c = c.replaceAll("\\brm\\s+-r\\b", "Remove-Item -Recurse");
+        c = c.replaceAll("\\brm\\s+-f\\b", "Remove-Item -Force");
+        // cp -r / mv -f
+        c = c.replaceAll("\\bcp\\s+-r\\b", "Copy-Item -Recurse");
+        c = c.replaceAll("\\bmv\\s+-f\\b", "Move-Item -Force");
+        // mkdir -p
+        c = c.replaceAll("\\bmkdir\\s+-p\\b", "New-Item -ItemType Directory -Force");
+        c = c.replaceAll("\\bmkdir\\s+-p\\s+", "New-Item -ItemType Directory -Force -Path ");
+        // grep / touch / which / ps aux
+        c = c.replaceAll("\\bgrep\\b", "Select-String");
+        c = c.replaceAll("\\btouch\\b", "New-Item -ItemType File -Force");
+        c = c.replaceAll("\\bwhich\\b", "Get-Command");
+        c = c.replaceAll("\\bps\\s+aux\\b", "Get-Process");
+        // head/tail 的 Unix 用法（head -n 5 file）
+        c = c.replaceAll("\\bhead\\s+-n\\s+(\\d+)\\s+", "Get-Content -TotalCount $1 ");
+        c = c.replaceAll("\\btail\\s+-n\\s+(\\d+)\\s+", "Get-Content -Tail $1 ");
+        return c;
+    }
+
+    /**
      * 这条命令像不像 cmd 语法。
      *
      * <p>判据：用了 cmd 的内置命令 + `/x` 风格开关（`rmdir /s /q`、`del /f`、`xcopy /e`…），
@@ -104,7 +142,14 @@ public class ShellExecuteTool extends AbstractToolPlugin {
                 } else {
                     String shell = pwshAvailable() ? "pwsh" : "powershell";
                     String prefix = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; ";
-                    pb.command(shell, "-NoProfile", "-NonInteractive", "-Command", prefix + command.replace("&&", ";"));
+                    // 模型很爱写 Unix 风格（实测 `ls -la` → "找不到与参数名称 la 匹配"）。
+                    // 只翻下面这些确定的写法，不做通用猜测；翻过就在日志里留痕。
+                    String translated = unixToPowerShell(command);
+                    if (!translated.equals(command)) {
+                        log.info("命令含 Unix 写法，已改写为 PowerShell: {} → {}", command, translated);
+                    }
+                    pb.command(shell, "-NoProfile", "-NonInteractive", "-Command",
+                        prefix + translated.replace("&&", ";"));
                 }
             } else {
                 pb.command("sh", "-c", command);

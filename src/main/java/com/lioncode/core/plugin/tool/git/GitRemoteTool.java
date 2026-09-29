@@ -29,7 +29,8 @@ public class GitRemoteTool extends AbstractToolPlugin {
     protected Map<String, Object> getParametersSchema() {
         return Map.of("type", "object", "properties", Map.of(
             "path", Map.of("type", "string", "description", "仓库路径"),
-            "action", Map.of("type", "string", "description", "list/add/remove/show"),
+            "action", Map.of("type", "string",
+                "description", "list / show / add / remove / get-url / set-url"),
             "name", Map.of("type", "string", "description", "远程名（add/remove/show 用，如 origin）"),
             "url", Map.of("type", "string", "description", "仓库地址（add 用）")
         ), "required", new String[]{"path", "action"});
@@ -60,6 +61,21 @@ public class GitRemoteTool extends AbstractToolPlugin {
                     }
                     pb = new ProcessBuilder(gitExecutable(), "remote", "add", name, url);
                 }
+                case "get-url", "geturl", "url" -> {
+                    // 实测模型要读远程地址（get-url），我们只支持 list/show/add/remove 就卡住了。
+                    String name = getStringArg(arguments, "name", "origin");
+                    pb = new ProcessBuilder(gitExecutable(), "remote", "get-url",
+                        name == null || name.isBlank() ? "origin" : name);
+                }
+                case "set-url", "seturl" -> {
+                    String name = getStringArg(arguments, "name", "origin");
+                    String url = getStringArg(arguments, "url", null);
+                    if (url == null || url.isBlank()) {
+                        return error("set-url 操作需要 url 参数");
+                    }
+                    pb = new ProcessBuilder(gitExecutable(), "remote", "set-url",
+                        name == null || name.isBlank() ? "origin" : name, url);
+                }
                 case "remove", "rm", "delete" -> {
                     String name = getStringArg(arguments, "name", null);
                     if (name == null || name.isBlank()) {
@@ -69,7 +85,8 @@ public class GitRemoteTool extends AbstractToolPlugin {
                 }
                 default -> {
                     return error("未知操作: " + action
-                        + "。支持 list / show / add / remove（add 需要 name 和 url）");
+                        + "。支持 list / show / add / remove / get-url / set-url"
+                        + "（add/set-url 需要 url，其余需要 name）");
                 }
             }
 
