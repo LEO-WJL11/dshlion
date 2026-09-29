@@ -107,6 +107,16 @@ public class AgentLoop {
     private static final int LOCAL_MAX_TOKENS_PER_ROUND = 1024;
 
     /**
+     * 每轮生成上限的天花板：写大文件（create_file 里带几百行内容）本来就要更多 token，
+     * 撞上限只会把 tool_call 截断成残缺调用、白烧一整轮。所以撞到 length 就翻倍：1024 → 2048 → 4096。
+     */
+    private static final int MAX_TOKENS_CEILING = 4096;
+
+    /** 会话 → 当前每轮生成长度上限（撞到 length 临时升档，下一条用户消息复位）。 */
+    private final java.util.Map<String, Integer> roundCapBySession =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * 纠正提示词：针对「模型想做工具调用但调用残缺」和「整轮什么都没输出」两种失手。
      *
      * 这两种情况在旧版里都表现为「没有工具调用 + 正文为空」→ 直接当成最终答案返回，
@@ -174,21 +184,26 @@ public class AgentLoop {
             return !rejected;
         }
         // ---- AUTO ----
-        // 本地模型也走原生 function calling —— 这一条是**实测**定的，别再凭印象改回去。
+        // 【本地盒子运行时走文本通道】—— 2026-09-29 抓包实测的结论，别凭印象改。
         //
-        // 早先的注释写的是"随包 llama-server 没开 --jinja，tools 会被服务端丢掉"，
-        // 那个前提是错的：这个版本的 llama-server `--help` 里明确写着
-        //     --jinja, --no-jinja  whether to use jinja template engine for chat (default: enabled)
-        // 也就是说 Jinja 模板默认就是开的。实测（直接打本机 8788）：
-        //   1) 带 tools 发一次 → 服务端返回的是**结构化 tool_calls**
-        //      {"type":"function","function":{"name":"list_directory","arguments":"{\"path\":…"}}
-        //      说明模板把 <tools> 渲染进了提示词，模型吐的 <function=…> 也被服务端解析回来了；
-        //   2) 提示词里不用再手写工具清单 —— Qwen 模板自己会渲染 "# Tools"，
-        //      还带"Required parameters MUST be specified"，参数名这件事由模板保证，
-        //      比我们在系统提示词里列一遍签名更靠谱（那正是 1.1.4 里工具第一次调用老失败的原因）。
+        // 原生通道在"一次只调一个工具"时没问题，但要让模型批量省时间（一次给 2-3 个调用），
+        // 本机 llama-server 会把模型吐的多个 <tool_call> 块**揉成一个调用**，把后续块的 XML
+        // 塞进第一个调用的 arguments 里，抓包抓到的原文长这样：
+        //   delete_file arguments = {"path":"test.txt\n</parameter></function>\n</tool_call>
+        //                           <tool_call>\n<function=change_permissions>…
+        // 这不是合法 JSON → 整轮作废（"参数不是合法JSON（残缺调用）"）→
+        // 每轮 91 秒（1024 token × 11 tok/s）白烧，连着三次之后任务就停住 —— 用户看到的
+        // "花了 6 分钟还中断了"就是这么来的。这是服务端解析的问题，我们改不了。
         //
-        // 文本 <tool_call> 解析器（QwenToolCallParser）继续留着当兜底：
-        // 端点 400 拒过 tools 时、或用户显式选 text 时走它。
+        // 文本通道下模型的输出是纯文本，多个块由我们自己的 QwenToolCallParser 解析，
+        // 服务端碰不到它。实测（同一个模型、同一条指令）：
+        //   不下发 tools + 提示词给出批量示例 → 一轮干净地回 3 个块，52 token，7.7 秒
+        // 而且更省：模板渲染的 tools 段约 3K token，我们自己的清单只要约 1.4K。
+        //
+        // 自定义 API（云端）仍然走原生 —— 它们按标准解析多个调用，没有这个毛病。
+        if (configStore != null && configStore.isLocalMode()) {
+            return false;
+        }
         return adapter == null || (!adapter.prefersTextToolCalls() && !rejected);
     }
 
@@ -217,6 +232,7 @@ public class AgentLoop {
         // 2.5 新任务开始：清除之前的暂停/停止状态
         agentControl.reset(sessionId);
         toolGuard.reset(sessionId);   // 新的一条用户消息：重复调用/连续失败计数清零
+        roundCapBySession.remove(sessionId);   // 生成上限也复位（上一条消息升过档不影响新任务）
 
         // 3. 构建消息列表
         List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
@@ -259,7 +275,7 @@ public class AgentLoop {
             ModelResponse response;
             try {
                 response = adapter.chatWithOptions(messages, model, thinkingLevel, toolDefinitions, null,
-                    maxTokensPerRound());
+                    maxTokensPerRound(sessionId));
             } catch (Exception e) {
                 log.error("模型调用失败", e);
                 eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
@@ -272,6 +288,11 @@ public class AgentLoop {
                 Map.of("content", truncate(response.content(), 200), 
                        "hasToolCalls", response.toolCalls() != null && !response.toolCalls().isEmpty()),
                 "模型响应");
+
+            // 撞到生成长度上限：本轮很可能被截断（大文件写入），把下一轮上限翻倍
+            if (response.finishReason() != null && response.finishReason().toLowerCase().contains("length")) {
+                bumpRoundCap(sessionId);
+            }
 
             // 6. 如果没有工具调用，检查文本中是否有XML/JSON格式的工具调用
             List<ChatMessage.ToolCall> toolCalls = response.toolCalls();
@@ -411,6 +432,7 @@ public class AgentLoop {
                 // 新任务开始：清除之前的暂停/停止状态
                 agentControl.reset(sessionId);
         toolGuard.reset(sessionId);   // 新的一条用户消息：重复调用/连续失败计数清零
+        roundCapBySession.remove(sessionId);   // 生成上限也复位（上一条消息升过档不影响新任务）
 
                 List<ChatMessage> messages = buildMessages(sessionId, mode, userMessage);
                 ModelAdapter adapter = adapterManager.getActiveAdapter();
@@ -425,8 +447,12 @@ public class AgentLoop {
                 
                 // 工具调用增量累积器：index -> {id, nameBuilder, argsBuilder}
                 Map<Integer, ToolCallAccumulator> toolCallAccumulators = new HashMap<>();
+
+                // 流式最后一片带的 finish_reason：用来判断这一轮是不是被长度上限截断了
+                java.util.concurrent.atomic.AtomicReference<String> lastFinish =
+                    new java.util.concurrent.atomic.AtomicReference<>();
                 
-                adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound())
+                adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound(sessionId))
                     .doOnNext(chunk -> {
                         // 实时发送文本增量
                         if (chunk.deltaContent() != null && !chunk.deltaContent().isEmpty()) {
@@ -447,10 +473,19 @@ public class AgentLoop {
                                 if (delta.argumentsDelta() != null) acc.argsBuilder.append(delta.argumentsDelta());
                             }
                         }
+                        if (chunk.finishReason() != null) {
+                            lastFinish.set(chunk.finishReason());
+                        }
                     })
                     .doOnComplete(() -> {
                         try {
                             String fullContent = contentBuilder.toString();
+
+                            // 撞到长度上限：下一轮上限翻倍（写大文件本来就需要更多 token）
+                            String fr = lastFinish.get();
+                            if (fr != null && fr.toLowerCase().contains("length")) {
+                                bumpRoundCap(sessionId);
+                            }
                             
                             // 从累积器构建完整的工具调用列表
                             List<ChatMessage.ToolCall> toolCalls = buildToolCallsFromAccumulators(toolCallAccumulators);
@@ -652,8 +687,10 @@ public class AgentLoop {
         StringBuilder contentBuilder = new StringBuilder();
         StringBuilder reasoningBuilder = new StringBuilder();
         Map<Integer, ToolCallAccumulator> toolCallAccumulators = new HashMap<>();
+        java.util.concurrent.atomic.AtomicReference<String> lastFinish =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
-        adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound())
+        adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound(sessionId))
             .doOnNext(chunk -> {
                 if (chunk.deltaContent() != null && !chunk.deltaContent().isEmpty()) {
                     contentBuilder.append(chunk.deltaContent());
@@ -662,6 +699,9 @@ public class AgentLoop {
                 // 累积思考内容（thinking模式回传）
                 if (chunk.reasoningContentDelta() != null && !chunk.reasoningContentDelta().isEmpty()) {
                     reasoningBuilder.append(chunk.reasoningContentDelta());
+                }
+                if (chunk.finishReason() != null) {
+                    lastFinish.set(chunk.finishReason());
                 }
                 if (chunk.toolCallDeltas() != null) {
                     for (ModelChunk.ToolCallDelta delta : chunk.toolCallDeltas()) {
@@ -676,6 +716,12 @@ public class AgentLoop {
             .doOnComplete(() -> {
                 try {
                     String fullContent = contentBuilder.toString();
+
+                    // 撞到长度上限：下一轮上限翻倍（写大文件本来就需要更多 token）
+                    String fr = lastFinish.get();
+                    if (fr != null && fr.toLowerCase().contains("length")) {
+                        bumpRoundCap(sessionId);
+                    }
                     
                     List<ChatMessage.ToolCall> toolCalls = buildToolCallsFromAccumulators(toolCallAccumulators);
                     
@@ -1062,10 +1108,21 @@ public class AgentLoop {
                 prompt.append("<tool_call>\n<name>read_file</name><arguments>{\"path\": \"a.txt\"}</arguments>\n</tool_call>\n\n");
                 // 模型是按 Qwen 模板微调的，它最顺手的其实是下面这种；解析器三种都认，
                 // 写清楚是为了让它别在格式上纠结（实测它会先吐一句说明再吐模板格式）。
-                prompt.append("也认模板原生格式：\n");
+                prompt.append("也认模板原生格式（**推荐用这个**）：\n");
                 prompt.append("<tool_call>\n<function=read_file>\n<parameter=path>a.txt</parameter>\n</function>\n</tool_call>\n\n");
+                prompt.append("- 只能用上面清单里的工具名，**不要发明工具**（发明出来的会被直接拒绝）。\n");
                 prompt.append("- arguments 必须是合法 JSON；参数名只用上面工具里的，不要发明参数。\n");
                 prompt.append("- 调用写进 <tool_call> 里，正文可以只有一句话，紧跟调用即可。\n\n");
+
+                // 批量示例：实测**必须把例子写出来**，模型才会真的一轮给 3 个块；
+                // 只写一句"可以一次给多个"它还是只给一个（试过）。
+                // 一轮 3 个 = 轮数砍到 1/3，在 11 token/s 的本机就是实打实的 3 倍速。
+                prompt.append("## 一次给多个调用（省时间，最多 3 个）\n");
+                prompt.append("下面几件事互不依赖时，**连着写多个 <tool_call> 块一次给完**，别一个一个等：\n");
+                prompt.append("<tool_call>\n<function=read_file>\n<parameter=path>a.txt</parameter>\n</function>\n</tool_call>\n");
+                prompt.append("<tool_call>\n<function=system_info>\n</function>\n</tool_call>\n");
+                prompt.append("<tool_call>\n<function=timestamp>\n<parameter=format>%H:%M</parameter>\n</function>\n</tool_call>\n\n");
+                prompt.append("有先后依赖的（要先看到结果才知道下一步）仍然一次只给一个；一次超过 3 个会被丢掉。\n\n");
             }
         }
         prompt.append("## 必须用工具的情形\n");
@@ -1178,22 +1235,36 @@ public class AgentLoop {
      * 本地封 1024（约 90 秒上限，正常一轮只要 40-60 个 token，够用）；
      * 云端不封，交给服务端默认。
      */
-    private Integer maxTokensPerRound() {
+    private Integer maxTokensPerRound(String sessionId) {
         if (configStore == null) {
             return null;
         }
         if (configStore.isLocalMode()) {
-            return LOCAL_MAX_TOKENS_PER_ROUND;
+            return roundCapBySession.computeIfAbsent(sessionId, k -> LOCAL_MAX_TOKENS_PER_ROUND);
         }
         // 自定义 API 指到本机服务（127.0.0.1/localhost）也一样慢，一并封顶
         Object url = configStore.snapshot().get("baseUrl");
         if (url instanceof String s) {
             String lower = s.toLowerCase();
             if (lower.contains("127.0.0.1") || lower.contains("localhost") || lower.contains("0.0.0.0")) {
-                return LOCAL_MAX_TOKENS_PER_ROUND;
+                return roundCapBySession.computeIfAbsent(sessionId, k -> LOCAL_MAX_TOKENS_PER_ROUND);
             }
         }
         return null;
+    }
+
+    /**
+     * 撞到生成长度上限（finish_reason=length）：本轮多半被截断了（tool_call 写了一半）。
+     * 下一轮把上限翻倍，让它能把"写大文件"这种本来就长的调用写完；顶层封 MAX_TOKENS_CEILING。
+     * 用户下一条消息会复位（见 toolGuard.reset 那两处调用旁边）。
+     */
+    private void bumpRoundCap(String sessionId) {
+        int now = roundCapBySession.getOrDefault(sessionId, LOCAL_MAX_TOKENS_PER_ROUND);
+        int next = Math.min(now * 2, MAX_TOKENS_CEILING);
+        if (next != now) {
+            roundCapBySession.put(sessionId, next);
+            log.warn("生成长度撞顶（finish_reason=length），本轮上限 {} → {} - 会话: {}", now, next, sessionId);
+        }
     }
 
     /** 参数指纹：用来判断"是不是一模一样的调用"（喂给 ToolCallGuard） */
