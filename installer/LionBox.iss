@@ -25,7 +25,8 @@
 ;        <tool_call><function=名字><parameter=键>值</parameter></function></tool_call>
 ; 1.1.5：工具别再来一遍（重复调用/连续失败守卫）+ 工具参数签名进提示词 + 网络工具快速失败
 ; 1.1.6：修掉 HTTP 500「System message must be at the beginning」+ 工具通道回到原生（--jinja 默认是开的）
-#define AppVersion     "1.1.6"
+; 1.1.7：一轮最多 3 个互不依赖的工具调用（轮数砍到 1/3）+ 本地生成封顶 1024（不再出现 6 分钟一轮）
+#define AppVersion     "1.1.7"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

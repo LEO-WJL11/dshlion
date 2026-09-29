@@ -92,6 +92,19 @@ public interface ModelAdapter {
                                 List<Map<String, Object>> tools);
 
     /**
+     * 流式调用（可选能力）：多带一个"本轮最多生成多少 token"。
+     *
+     * 为什么需要它：本地模型解码只有 11-12 token/s，llama-server 起来时带的是
+     * `-n 4096`，一轮话多就能写 6 分 20 秒（日志里真出现过）。界面走的就是流式这条路，
+     * 所以封顶必须能传进来。默认实现忽略该参数，退回普通 chatStream。
+     */
+    default Flux<ModelChunk> chatStream(List<ChatMessage> messages, String model,
+                                        ThinkingLevel thinkingLevel,
+                                        List<Map<String, Object>> tools, Integer maxTokens) {
+        return chatStream(messages, model, thinkingLevel, tools);
+    }
+
+    /**
      * 获取可用模型列表
      */
     List<ModelInfo> getAvailableModels();

@@ -92,6 +92,21 @@ public class AgentLoop {
     private static final int MAX_TOOL_ROUNDS = 60;
 
     /**
+     * 一轮里最多执行几个工具调用。
+     *
+     * 【这是"慢"的最大结构性原因】本机解码只有 11-12 token/s（实测：89 ms/token），
+     * 以前硬性"一轮只准一个工具"，50 个工具就是 50 轮 —— 每轮 2-5 秒预填充
+     * 加 4-5 秒生成，合计约 7 分钟，用户体感就是"模型太慢"。
+     * 现在允许一轮 3 个互不依赖的调用，轮数直接砍到 1/3，等价于 3 倍速，
+     * 而且不牺牲正确性：工具仍然严格按顺序执行、每个结果都单独回给模型
+     * （所以有依赖的多步任务照样安全，只是提示词要求它这种时候一轮只给一个）。
+     */
+    private static final int MAX_TOOLS_PER_ROUND = 3;
+
+    /** 本地模型一轮最多生成这么多 token（服务器默认 -n 4096 ≈ 6 分 20 秒，太长）。 */
+    private static final int LOCAL_MAX_TOKENS_PER_ROUND = 1024;
+
+    /**
      * 纠正提示词：针对「模型想做工具调用但调用残缺」和「整轮什么都没输出」两种失手。
      *
      * 这两种情况在旧版里都表现为「没有工具调用 + 正文为空」→ 直接当成最终答案返回，
@@ -243,7 +258,8 @@ public class AgentLoop {
             
             ModelResponse response;
             try {
-                response = adapter.chat(messages, model, thinkingLevel, toolDefinitions);
+                response = adapter.chatWithOptions(messages, model, thinkingLevel, toolDefinitions, null,
+                    maxTokensPerRound());
             } catch (Exception e) {
                 log.error("模型调用失败", e);
                 eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
@@ -274,18 +290,10 @@ public class AgentLoop {
                 }
             }
 
-            // 6.5 强制单工具：一次只能执行一个工具调用（多余的丢弃并提示模型）
-            boolean droppedExtraTools = false;
-            if (toolCalls.size() > 1) {
-                String firstTool = toolCalls.get(0).name();
-                log.warn("模型一次返回 {} 个工具调用，仅执行第一个 ({}) - 会话: {}",
-                    toolCalls.size(), firstTool, sessionId);
-                eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
-                    Map.of("toolName", firstTool, "droppedCount", toolCalls.size() - 1),
-                    "单工具限制：已忽略多余工具调用 " + (toolCalls.size() - 1) + " 个");
-                toolCalls = List.of(toolCalls.get(0));
-                droppedExtraTools = true;
-            }
+            // 6.5 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用（多余的丢弃并提示模型）
+            int toolCountBeforeCap = toolCalls.size();
+            toolCalls = capToolsPerRound(sessionId, toolCalls);
+            boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
 
             // 7. 如果仍然没有工具调用，返回最终答案
             if (toolCalls.isEmpty()) {
@@ -372,8 +380,8 @@ public class AgentLoop {
             // 9.5 单工具限制提示：告诉模型多余的调用被忽略了
             if (droppedExtraTools) {
                 conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                    "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
-                    + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
+                    "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
+                    + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
             }
 
             // 10. 更新消息列表，继续下一轮
@@ -418,7 +426,7 @@ public class AgentLoop {
                 // 工具调用增量累积器：index -> {id, nameBuilder, argsBuilder}
                 Map<Integer, ToolCallAccumulator> toolCallAccumulators = new HashMap<>();
                 
-                adapter.chatStream(messages, model, thinkingLevel, toolDefinitions)
+                adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound())
                     .doOnNext(chunk -> {
                         // 实时发送文本增量
                         if (chunk.deltaContent() != null && !chunk.deltaContent().isEmpty()) {
@@ -490,14 +498,10 @@ public class AgentLoop {
                                 sink.next(AgentChunk.done(fullContent));
                                 sink.complete();
                             } else {
-                                // 强制单工具：一次只能执行一个工具调用
-                                boolean droppedExtraTools = false;
-                                if (toolCalls.size() > 1) {
-                                    log.warn("模型一次返回 {} 个工具调用，仅执行第一个 ({}) - 会话: {}",
-                                        toolCalls.size(), toolCalls.get(0).name(), sessionId);
-                                    toolCalls = List.of(toolCalls.get(0));
-                                    droppedExtraTools = true;
-                                }
+                                // 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用
+                                int toolCountBeforeCap = toolCalls.size();
+                                toolCalls = capToolsPerRound(sessionId, toolCalls);
+                                boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
 
                                 // 有工具调用：保存助手消息，执行工具，然后继续下一轮
                                 sink.next(AgentChunk.text("\n\n🔧 正在执行工具调用...\n\n"));
@@ -557,8 +561,8 @@ public class AgentLoop {
                                 // 单工具限制提示
                                 if (droppedExtraTools) {
                                     conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                                        "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
-                                        + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
+                                        "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
+                                        + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
                                 }
 
                                 // 继续下一轮（递归调用），使用更新后的消息列表
@@ -649,7 +653,7 @@ public class AgentLoop {
         StringBuilder reasoningBuilder = new StringBuilder();
         Map<Integer, ToolCallAccumulator> toolCallAccumulators = new HashMap<>();
 
-        adapter.chatStream(messages, model, thinkingLevel, toolDefinitions)
+        adapter.chatStream(messages, model, thinkingLevel, toolDefinitions, maxTokensPerRound())
             .doOnNext(chunk -> {
                 if (chunk.deltaContent() != null && !chunk.deltaContent().isEmpty()) {
                     contentBuilder.append(chunk.deltaContent());
@@ -694,14 +698,10 @@ public class AgentLoop {
                         sink.next(AgentChunk.done(fullContent));
                         sink.complete();
                     } else {
-                        // 强制单工具：一次只能执行一个工具调用
-                        boolean droppedExtraTools = false;
-                        if (toolCalls.size() > 1) {
-                            log.warn("模型一次返回 {} 个工具调用，仅执行第一个 ({}) - 会话: {} (轮次 {})",
-                                toolCalls.size(), toolCalls.get(0).name(), sessionId, currentRound + 1);
-                            toolCalls = List.of(toolCalls.get(0));
-                            droppedExtraTools = true;
-                        }
+                        // 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用
+                        int toolCountBeforeCap = toolCalls.size();
+                        toolCalls = capToolsPerRound(sessionId, toolCalls);
+                        boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
 
                         // 继续执行工具
                         sink.next(AgentChunk.text("\n\n🔧 正在执行工具调用...\n\n"));
@@ -730,8 +730,8 @@ public class AgentLoop {
                         // 单工具限制提示
                         if (droppedExtraTools) {
                             conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                                "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
-                                + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
+                                "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
+                                + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
                         }
 
                         List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
@@ -1026,7 +1026,9 @@ public class AgentLoop {
         prompt.append("\n## 输出纪律（直接影响速度，必须守）\n");
         prompt.append("1. 正文极简：一轮最多两句话（≤60 字）。不解释背景、不罗列计划、不复述文件内容、不重复工具结果。\n");
         prompt.append("2. 要动手就直接动手：不要写“我这就去读取/修改…”这类过渡句，直接给工具调用。\n");
-        prompt.append("3. 一轮只给一个工具调用；需要多步就分成多轮，宁可多走一轮，也不要在一轮里塞多个调用。\n");
+        // 这一条直接决定"快不快"：本机 11-12 token/s，一轮一个工具 = 50 个工具 50 轮 ≈ 7 分钟。
+        prompt.append("3. 互不依赖的调用要一次给（最多 3 个）：同时读几个文件、同时查几样信息，一轮里一起给；\n");
+        prompt.append("   有先后依赖的（得先看到结果才知道下一步）就一轮只给一个。一次给超过 3 个会被丢掉。\n");
         prompt.append("4. 工具结果回来后：能用一句话回答就回答，要继续做就直接调下一个工具，不要总结过程。\n");
         prompt.append("5. 不输出思考过程、不写“第一步/第二步”的规划清单、不复述工具参数。\n\n");
 
@@ -1142,6 +1144,56 @@ public class AgentLoop {
             log.debug("取工具参数签名失败: {}", tool.getName(), e);
             return "";
         }
+    }
+
+    /**
+     * 一轮里最多保留 MAX_TOOLS_PER_ROUND 个工具调用，多余的丢掉并告诉模型。
+     *
+     * 以前这里是硬性"一轮只准一个工具"（1.1.4 时代模型一次吐好几个调用、参数还错，
+     * 只能一个个来）。但本机解码 11-12 token/s，一轮一个工具 = 50 个工具 50 轮 ≈ 7 分钟。
+     * 现在原生通道已通（服务端按 Qwen 模板解析 &lt;function=…&gt;），一轮 3 个互不依赖的
+     * 调用完全没问题；执行仍严格按顺序、逐个回结果，所以有依赖的任务不受影响。
+     */
+    private List<ChatMessage.ToolCall> capToolsPerRound(String sessionId,
+                                                        List<ChatMessage.ToolCall> toolCalls) {
+        if (toolCalls.size() <= MAX_TOOLS_PER_ROUND) {
+            return toolCalls;
+        }
+        int extra = toolCalls.size() - MAX_TOOLS_PER_ROUND;
+        log.warn("模型一次返回 {} 个工具调用，本轮只执行前 {} 个（剩 {} 个请下一轮再给）- 会话: {}",
+            toolCalls.size(), MAX_TOOLS_PER_ROUND, extra, sessionId);
+        eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+            Map.of("droppedCount", extra, "limit", MAX_TOOLS_PER_ROUND),
+            "一轮工具数限制：已忽略多余工具调用 " + extra + " 个");
+        return List.copyOf(toolCalls.subList(0, MAX_TOOLS_PER_ROUND));
+    }
+
+    /**
+     * 一轮最多生成多少 token —— 本地模型必须封顶。
+     *
+     * 实测 llama-server 起来时带的是 `-n 4096`，而解码只有 11-12 token/s：
+     * 模型要是话多，一轮就能写 4096 个 token ≈ **6 分 20 秒**（日志里真出现过
+     * `eval time = 380323.93 ms / 4096 tokens`）。用户看到的就是"卡住了"。
+     *
+     * 本地封 1024（约 90 秒上限，正常一轮只要 40-60 个 token，够用）；
+     * 云端不封，交给服务端默认。
+     */
+    private Integer maxTokensPerRound() {
+        if (configStore == null) {
+            return null;
+        }
+        if (configStore.isLocalMode()) {
+            return LOCAL_MAX_TOKENS_PER_ROUND;
+        }
+        // 自定义 API 指到本机服务（127.0.0.1/localhost）也一样慢，一并封顶
+        Object url = configStore.snapshot().get("baseUrl");
+        if (url instanceof String s) {
+            String lower = s.toLowerCase();
+            if (lower.contains("127.0.0.1") || lower.contains("localhost") || lower.contains("0.0.0.0")) {
+                return LOCAL_MAX_TOKENS_PER_ROUND;
+            }
+        }
+        return null;
     }
 
     /** 参数指纹：用来判断"是不是一模一样的调用"（喂给 ToolCallGuard） */

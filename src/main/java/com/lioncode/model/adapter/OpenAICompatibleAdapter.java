@@ -242,7 +242,19 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     @Override
     public Flux<ModelChunk> chatStream(List<ChatMessage> messages, String model, ThinkingLevel thinkingLevel,
                                        List<Map<String, Object>> tools) {
-        return Flux.create(sink -> startStream(sink, messages, model, thinkingLevel, tools, 0));
+        return chatStream(messages, model, thinkingLevel, tools, (Integer) null);
+    }
+
+    /**
+     * 流式调用，多带一个"本轮最多生成多少 token"。
+     *
+     * 界面走的就是流式这条路，所以本地那个 `-n 4096`（解码 11 token/s ≈ 6 分 20 秒）
+     * 必须在这里也压住，否则封顶只对非流式的脚本生效。
+     */
+    @Override
+    public Flux<ModelChunk> chatStream(List<ChatMessage> messages, String model, ThinkingLevel thinkingLevel,
+                                       List<Map<String, Object>> tools, Integer maxTokens) {
+        return Flux.create(sink -> startStream(sink, messages, model, thinkingLevel, tools, 0, maxTokens));
     }
 
     /**
@@ -253,7 +265,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
      */
     private void startStream(reactor.core.publisher.FluxSink<ModelChunk> sink, List<ChatMessage> messages,
                              String model, ThinkingLevel thinkingLevel, List<Map<String, Object>> tools,
-                             int stage) {
+                             int stage, Integer maxTokens) {
         boolean hasTools = tools != null && !tools.isEmpty();
         // stage 越高，请求越"朴素"
         List<Map<String, Object>> effectiveTools = stage >= 2 ? List.of() : tools;
@@ -263,6 +275,10 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
             ensureEndpointReady();      // 本地模式：第一条消息时才真正加载模型
             ObjectNode request = buildRequest(messages, model, effectiveThinking, true,
                 effectiveTools, strictToolParams);
+            // 本轮生成上限：本地 11 token/s，服务器默认 -n 4096 ≈ 6 分 20 秒，必须压住
+            if (maxTokens != null && maxTokens > 0) {
+                request.put("max_tokens", maxTokens);
+            }
             String jsonBody = mapper.writeValueAsString(request);
 
             Request.Builder builder = new Request.Builder()
@@ -297,7 +313,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
                     if (response != null && response.code() == 400 && stage < 2 && hasTools) {
                         log.warn("流式请求被拒(HTTP 400)，降级到 stage {} 重试: {}",
                             stage + 1, response.message());
-                        startStream(sink, messages, model, thinkingLevel, tools, stage + 1);
+                        startStream(sink, messages, model, thinkingLevel, tools, stage + 1, maxTokens);
                         return;
                     }
                     if (t != null) {
