@@ -54,10 +54,18 @@ public class AppConfigStore {
     public static final String MODE_CUSTOM = "custom";
 
     /**
-     * 工具调用方式：自动（推荐）
-     *   自定义 API → 原生 function calling；本地 GGUF 运行时 → 文本 &lt;tool_call&gt; 约定。
-     *   依据是两种端点的实际能力：本地 llama-server 未启用 --jinja，请求里的 tools
-     *   会被直接忽略，而本地模型又是按文本约定微调的。
+     * 工具调用方式：自动（推荐）—— 两种端点都走原生 function calling。
+     *
+     * 早先这里写的是"本地 GGUF 运行时 → 文本 &lt;tool_call&gt; 约定"，理由是"llama-server
+     * 没开 --jinja，tools 会被丢掉"。这个前提是**错的**：随包的 llama-server
+     * {@code --help} 里明确写着 {@code --jinja ... (default: enabled)}，Jinja 默认就是开的。
+     * 直接打本机 8788 实测：带 tools 发一次，服务端回的是结构化
+     * {@code tool_calls}（模板把 &lt;tools&gt; 渲染进提示词，也把模型吐的
+     * {@code <function=…>} 解析回来了）。
+     *
+     * 所以现在：能下发 tools 就下发 —— 参数名与必填项由模板保证，
+     * 比在系统提示词里手写一份清单更可靠；文本 &lt;tool_call&gt; 解析器留着当兜底
+     * （端点 400 拒过 tools、或用户显式选 text 时用）。
      */
     public static final String TOOLCALL_AUTO = "auto";
     /** 工具调用方式：强制原生 function calling（下发 tools，让模型走 API 工具通道） */

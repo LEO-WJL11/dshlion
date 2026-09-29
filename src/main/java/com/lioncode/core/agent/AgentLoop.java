@@ -159,17 +159,21 @@ public class AgentLoop {
             return !rejected;
         }
         // ---- AUTO ----
-        // 本地模型必须走文本 <tool_call> 约定，两个理由都是硬事实：
-        //   1) 随包交付的 llama-server **没开 --jinja**，请求里的 tools 会被服务端直接丢掉，
-        //      模型根本看不到工具定义 —— 下发 tools 纯粹白烧 token（tools 的 JSON 有 4-5K token，
-        //      每次请求都要预填充，本机实测首个请求前缀被顶到 6.3K token ≈ 10 秒）；
-        //   2) 这个模型本来就是按文本 <tool_call> 约定微调的，提示词教它走原生反而互相打架。
-        // AppConfigStore 里 TOOLCALL_AUTO 的注释一直就是这么写的，只是这里没实现
-        // （native 分支只看 prefersTextToolCalls()，而 OpenAI 兼容适配器恒为 false），
-        // 所以线上跑的一直是「下发 tools（被无视）+ 提示词不教文本格式」这个最差组合。
-        if (configStore != null && configStore.isLocalMode()) {
-            return false;
-        }
+        // 本地模型也走原生 function calling —— 这一条是**实测**定的，别再凭印象改回去。
+        //
+        // 早先的注释写的是"随包 llama-server 没开 --jinja，tools 会被服务端丢掉"，
+        // 那个前提是错的：这个版本的 llama-server `--help` 里明确写着
+        //     --jinja, --no-jinja  whether to use jinja template engine for chat (default: enabled)
+        // 也就是说 Jinja 模板默认就是开的。实测（直接打本机 8788）：
+        //   1) 带 tools 发一次 → 服务端返回的是**结构化 tool_calls**
+        //      {"type":"function","function":{"name":"list_directory","arguments":"{\"path\":…"}}
+        //      说明模板把 <tools> 渲染进了提示词，模型吐的 <function=…> 也被服务端解析回来了；
+        //   2) 提示词里不用再手写工具清单 —— Qwen 模板自己会渲染 "# Tools"，
+        //      还带"Required parameters MUST be specified"，参数名这件事由模板保证，
+        //      比我们在系统提示词里列一遍签名更靠谱（那正是 1.1.4 里工具第一次调用老失败的原因）。
+        //
+        // 文本 <tool_call> 解析器（QwenToolCallParser）继续留着当兜底：
+        // 端点 400 拒过 tools 时、或用户显式选 text 时走它。
         return adapter == null || (!adapter.prefersTextToolCalls() && !rejected);
     }
 
@@ -296,7 +300,7 @@ public class AgentLoop {
                     eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
                         Map.of("malformed", malformed, "repair", repairs),
                         malformed ? "残缺工具调用，已纠正重试" : "空响应，已纠正重试");
-                    conversationHistory.addMessage(ConversationMessage.system(sessionId, repairHint(malformed)));
+                    addNotice(sessionId, repairHint(malformed));
                     messages = buildMessages(sessionId, mode, userMessage);
                     continue;
                 }
@@ -358,7 +362,7 @@ public class AgentLoop {
                         continue;
                     }
                     if (decision.hint() != null) {
-                        conversationHistory.addMessage(ConversationMessage.system(sessionId, decision.hint()));
+                        addNotice(sessionId, decision.hint());
                     }
                     toolGuard.afterCall(sessionId, toolCall.name(),
                         executeTool(sessionId, toolCall, mode));
@@ -367,7 +371,7 @@ public class AgentLoop {
 
             // 9.5 单工具限制提示：告诉模型多余的调用被忽略了
             if (droppedExtraTools) {
-                conversationHistory.addMessage(ConversationMessage.system(sessionId,
+                conversationHistory.addMessage(ConversationMessage.user(sessionId,
                     "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
                     + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
             }
@@ -470,7 +474,7 @@ public class AgentLoop {
                                         Map.of("malformed", malformed, "repair", next),
                                         malformed ? "残缺工具调用，已纠正重试" : "空响应，已纠正重试");
                                     conversationHistory.addMessage(
-                                        ConversationMessage.system(sessionId, repairHint(malformed)));
+                                        ConversationMessage.user(sessionId, repairHint(malformed)));
                                     sink.next(AgentChunk.text(malformed
                                         ? "\n\n⚠ 上次的工具调用不完整，正在重试…\n\n"
                                         : "\n\n⚠ 上次没有返回内容，正在重试…\n\n"));
@@ -541,7 +545,7 @@ public class AgentLoop {
                                         }
                                         if (decision.hint() != null) {
                                             conversationHistory.addMessage(
-                                                ConversationMessage.system(sessionId, decision.hint()));
+                                                ConversationMessage.user(sessionId, decision.hint()));
                                         }
                                         toolGuard.afterCall(sessionId, toolCall.name(),
                                             executeTool(sessionId, toolCall, mode));
@@ -552,7 +556,7 @@ public class AgentLoop {
 
                                 // 单工具限制提示
                                 if (droppedExtraTools) {
-                                    conversationHistory.addMessage(ConversationMessage.system(sessionId,
+                                    conversationHistory.addMessage(ConversationMessage.user(sessionId,
                                         "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
                                         + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
                                 }
@@ -725,7 +729,7 @@ public class AgentLoop {
 
                         // 单工具限制提示
                         if (droppedExtraTools) {
-                            conversationHistory.addMessage(ConversationMessage.system(sessionId,
+                            conversationHistory.addMessage(ConversationMessage.user(sessionId,
                                 "【系统提示】一次只能调用一个工具。你上次一次返回了多个工具调用，"
                                 + "多余的调用已被忽略，仅执行了第一个。请每次只输出一个工具调用，等待结果后再继续。"));
                         }
@@ -971,7 +975,19 @@ public class AgentLoop {
                         messages.add(ChatMessage.assistant(msg.content(), msg.reasoningContent()));
                     }
                 }
-                case "system" -> messages.add(ChatMessage.system(msg.content()));
+                case "system" -> {
+                    // 【必须只在最前面】Qwen 的 Jinja 模板（llama-server 现在默认启用 --jinja）
+                    // 对夹在中间的 system 消息直接 raise_exception('System message must be at
+                    // the beginning')，服务端 500，用户看到的是"模型调用失败"。
+                    // 老会话文件里可能已经存了这种消息，所以这里做一道兜底：
+                    // 非首条的 system → 降级成 user（带【系统提示】前缀，语义不变）。
+                    if (messages.isEmpty()) {
+                        messages.add(ChatMessage.system(msg.content()));
+                    } else {
+                        log.debug("历史里的 system 消息不在开头，已降级为 user 发送（模板不允许）");
+                        messages.add(ChatMessage.user("【系统提示】" + msg.content()));
+                    }
+                }
                 case "tool" -> messages.add(ChatMessage.toolResult(msg.toolCallId(), msg.content()));
             }
         }
@@ -1014,31 +1030,30 @@ public class AgentLoop {
         prompt.append("4. 工具结果回来后：能用一句话回答就回答，要继续做就直接调下一个工具，不要总结过程。\n");
         prompt.append("5. 不输出思考过程、不写“第一步/第二步”的规划清单、不复述工具参数。\n\n");
 
-        // 工具清单：只给「名字 + 一句用途」。
-        // 本地 llama-server 没开 --jinja，tools 定义发过去会被服务端丢掉，
-        // 所以这份清单就是模型能看到的**唯一**工具说明：名字不能省（省了它就开始编造工具），
-        // 但描述要砍到一句话 —— 53 个工具的长描述累积起来是几百 token 的白烧。
+        // 工具说明。
+        //
+        // 原生通道：**不列清单** —— Qwen 的 Jinja 模板会自己把 tools 渲染成 "# Tools" 段
+        // （还带 "Required parameters MUST be specified"），我们那份手写清单纯属重复，
+        // 白白多烧一千多 token，还可能和模板里的定义打架。
+        // 文本通道：清单就是模型能看到的**唯一**工具说明，所以必须列全，
+        // 而且要带参数名（1.1.4 里工具第一次调用老失败，就是因为只给了名字和一句描述）。
         List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
         if (!tools.isEmpty()) {
-            prompt.append("## 可用工具（").append(tools.size()).append(" 个）\n");
-            prompt.append("括号里是参数名，带 * 的是必填。**参数名必须照抄**，写错或漏必填都会直接调用失败。\n");
-            for (ToolPlugin tool : tools) {
-                prompt.append("- ").append(tool.getName()).append(toolSignature(tool)).append(": ")
-                      .append(shortDescription(tool.getDescription())).append("\n");
-            }
-            prompt.append("\n");
-
-            prompt.append("## 工具调用格式\n");
             if (nativeTools) {
-                // 原生 function calling：工具定义已随请求下发，让模型走 API 的工具通道。
-                //
-                // 【千万别在这里放文本格式的代码块示例】—— 实测 MiMo 会因此把两种机制
-                // 混在一起，返回一个残缺的原生调用（name=null、arguments="{}"、
-                // finish_reason=stop），工具直接跑不起来。去掉示例后同一请求立刻正常。
-                // 所以这里只做一句说明，不给范例。
-                prompt.append("工具定义已随本次请求下发：把调用放在 tool_calls 里返回，不要写成正文文字。\n");
-                prompt.append("arguments 必须是合法 JSON 对象，参数名取自工具定义的 parameters，不要自己发明。\n\n");
+                prompt.append("## 可用工具\n");
+                prompt.append("本次请求已随消息下发 ").append(tools.size())
+                      .append(" 个工具定义（见 # Tools），参数名与必填项以那份定义为准，不要自己发明。\n");
+                prompt.append("把调用放在 tool_calls 里返回，不要写成正文文字。\n\n");
             } else {
+                prompt.append("## 可用工具（").append(tools.size()).append(" 个）\n");
+                prompt.append("括号里是参数名，带 * 的是必填。**参数名必须照抄**，写错或漏必填都会直接调用失败。\n");
+                for (ToolPlugin tool : tools) {
+                    prompt.append("- ").append(tool.getName()).append(toolSignature(tool)).append(": ")
+                          .append(shortDescription(tool.getDescription())).append("\n");
+                }
+                prompt.append("\n");
+
+                prompt.append("## 工具调用格式\n");
                 prompt.append("首选 JSON：\n");
                 prompt.append("<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.txt\"}}\n</tool_call>\n\n");
                 prompt.append("也认 XML：\n");
@@ -1051,7 +1066,6 @@ public class AgentLoop {
                 prompt.append("- 调用写进 <tool_call> 里，正文可以只有一句话，紧跟调用即可。\n\n");
             }
         }
-
         prompt.append("## 必须用工具的情形\n");
         prompt.append("读/写/改/删文件、执行命令、看目录、搜内容、Git 操作、查系统信息 —— 一律调工具，不许只给建议。\n");
 
@@ -1140,6 +1154,24 @@ public class AgentLoop {
         } catch (Exception e) {
             return String.valueOf(arguments);
         }
+    }
+
+    /**
+     * 往会话里塞一条「系统提示」。
+     *
+     * <p>【注意用 user 角色而不是 system】Qwen 的 Jinja 模板（llama-server 默认启用 --jinja）
+     * 遇到不在开头的 system 消息会直接 raise_exception：
+     * "System message must be at the beginning."，服务端回 HTTP 500，
+     * 用户看到的是"模型调用失败: HTTP 500"，任务当场断掉（2026-09-28 23:4x 真出现过）。
+     * 所以中途的提示一律走 user 角色（内容自带【系统提示】前缀），
+     * 同时 buildMessages() 里还有一道兜底：历史里的 system 消息不在开头也会降级成 user。
+     */
+    private void addNotice(String sessionId, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String body = text.startsWith("【系统提示】") ? text : "【系统提示】" + text;
+        conversationHistory.addMessage(ConversationMessage.user(sessionId, body));
     }
 
     /**
