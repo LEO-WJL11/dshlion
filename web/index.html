@@ -177,6 +177,24 @@
             </div>
         </header>
 
+        <!-- 模型下载进度：前台可见（这是"下 5 GB 时到底在干嘛"的唯一答案） -->
+        <div id="dlBar" style="display:none;padding:8px 16px;background:#1a1a2e;
+             border-bottom:1px solid #2d2d4a">
+            <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;
+                 color:#e8e8f0;max-width:1100px;margin:0 auto">
+                <span id="dlIcon">⏳</span>
+                <span id="dlText" style="white-space:nowrap;color:#e8e8f0">正在下载模型…</span>
+                <div style="flex:1;height:9px;background:#12121f;border:1px solid #2d2d4a;
+                     border-radius:5px;overflow:hidden;min-width:120px">
+                    <div id="dlFill" style="height:100%;width:0%;
+                         background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div>
+                </div>
+                <span id="dlPct" style="width:46px;text-align:right;color:#fdcb6e;
+                     font-variant-numeric:tabular-nums">0%</span>
+                <span id="dlSpeed" style="color:#6a6a80;min-width:150px"></span>
+            </div>
+        </div>
+
         <div class="message-area" id="msgArea">
             <div class="welcome">
                 <div class="welcome-icon">🦁</div>
@@ -272,6 +290,8 @@ var App = {
         this.loadPlugins();
         // 顶部显示当前模型来源（本地模型 / 自定义 API），以及本地模型是否已加载
         this.refreshRuntimeBanner();
+        // 模型下载进度：前台进度条靠它每 1.5 秒刷一次
+        this.startLocalWatcher();
         // 先恢复应用配置（模型、apiKey、baseUrl等），再恢复会话与历史
         this.restoreConfig(function() {
             self.refreshRuntimeBanner();
@@ -1279,6 +1299,13 @@ var App = {
                         +      '<div style="color:#e8e8f0">' + self.escapeHtml(m.label) + tags + '</div>'
                         +      '<div style="color:#6a6a80;font-size:11px">' + self.escapeHtml(m.note || '') + '</div>'
                         +      '<div style="color:#6a6a80;font-size:11px">' + state + '</div>'
+                        +      (m.downloading
+                                  ? '<div style="margin-top:5px;height:6px;background:#12121f;'
+                                    + 'border:1px solid #2d2d4a;border-radius:4px;overflow:hidden">'
+                                    + '<div id="dlrowfill_' + self.escapeAttr(m.file) + '" '
+                                    + 'style="height:100%;width:0%;background:#6c5ce7;transition:width .4s">'
+                                    + '</div></div>'
+                                  : '')
                         +    '</td>'
                         +    '<td style="padding:7px 4px;text-align:right;white-space:nowrap">';
                 if (m.downloading) {
@@ -1407,6 +1434,7 @@ var App = {
     /** 切换/使用某个模型（没下载的会在**后台**开始下，不再把这个请求堵上十几分钟） */
     switchLlamaModel: function(file) {
         if (!confirm('用 ' + file + '？\n\n没下过的话会在后台下载（几百 MB 到 9 GB，进度看顶部横幅）。')) return;
+        App.startLocalWatcher(true);   // 缺权重的话会在后台下，进度条马上出来
         var msg = document.getElementById('llamaMsg');
         if (msg) msg.textContent = '正在切换…';
         fetch('/api/runtime/local/model', {
@@ -1422,6 +1450,7 @@ var App = {
 
     /** 只下载这一份（不切换）：可以把几份都先下好，再挑一份用 */
     downloadLlamaModel: function(file) {
+        App.startLocalWatcher(true);   // 立刻开始盯，前台进度条马上出来
         var msg = document.getElementById('llamaMsg');
         if (msg) msg.textContent = '已开始下载 ' + file + '（后台进行，进度看顶部横幅）…';
         fetch('/api/runtime/local/models/download', {
@@ -1929,18 +1958,117 @@ var App = {
                 el.innerHTML = dot + ' 本地模型：' + (d.model || '')
                              + ' <span style="color:#6a6a80">' + txt + ' · 切换 ▾</span>';
                 el.title = (d.baseUrl || '') + '（点击切换模型来源）';
-                // 下载中就自己再查一次，否则百分比不会动
-                if (st.phase === 'downloading' && !App._dlTimer) {
-                    App._dlTimer = setInterval(function() {
-                        App.refreshRuntimeBanner();
-                    }, 3000);
-                } else if (st.phase !== 'downloading' && App._dlTimer) {
-                    clearInterval(App._dlTimer);
-                    App._dlTimer = null;
-                    if (App.fillModelsFromConfig) { App.fillModelsFromConfig(); }
-                }
+                // 下载中的进度由 App.tickLocal 统一刷（进度条 + 横幅一起动）
+                if (st.phase === 'downloading') { App.startLocalWatcher(); }
             }
         });
+    },
+
+    /**
+     * 模型下载观察器：每 1.5 秒查一次本地运行时状态，把前台进度条刷新。
+     *
+     * 为什么单独一个：下载是后端后台线程在跑，界面得自己盯着；
+     * 顺带算出速度和剩余时间 —— 下 5 GB 的时候，"还要多久"比百分比更让人安心。
+     */
+    startLocalWatcher: function(fast) {
+        // 下载时 1.5 秒一次（进度条要跟得上），空闲时 5 秒一次（够发现"后端自己开始下了"）
+        var want = fast ? 1500 : 5000;
+        if (App._localTimer && App._localSpeed === want) return;
+        if (App._localTimer) { clearInterval(App._localTimer); }
+        App._localSpeed = want;
+        App._localTimer = setInterval(function() { App.tickLocal(); }, want);
+        App.tickLocal();
+    },
+
+    tickLocal: function() {
+        fetch('/api/runtime/local').then(function(r) { return r.json(); }).then(function(res) {
+            var st = (res && res.data) || {};
+            App.renderDownloadBar(st);
+        }).catch(function() { /* 网络抖一下就等下一拍 */ });
+    },
+
+    /** 把状态渲染成前台进度条；不在下载就收起来 */
+    renderDownloadBar: function(st) {
+        var bar = document.getElementById('dlBar');
+        if (!bar) return;
+        var phase = st.phase || '';
+        var file = st.downloadingFile || st.modelFile || '';
+        var bytes = st.downloadBytes || 0;
+        var total = st.downloadTotal || 0;
+
+        if (phase === 'downloading') {
+            var pct = total > 0 ? Math.floor(bytes * 100 / total) : 0;
+            // 速度 / 剩余时间：拿上一次的采样算
+            var now = Date.now();
+            var speedTxt = '';
+            if (App._dlPrev && App._dlPrev.bytes > 0 && now > App._dlPrev.at) {
+                var sp = (bytes - App._dlPrev.bytes) / ((now - App._dlPrev.at) / 1000.0);
+                if (sp > 0) {
+                    speedTxt = (sp / 1048576).toFixed(1) + ' MB/s';
+                    if (total > bytes) {
+                        var left = Math.round((total - bytes) / sp);
+                        speedTxt += ' · 约 ' + (left >= 60
+                            ? Math.round(left / 60) + ' 分钟'
+                            : left + ' 秒') + '后完成';
+                    }
+                }
+            }
+            App._dlPrev = {bytes: bytes, at: now};
+
+            bar.style.display = 'block';
+            bar.style.background = '#1a1a2e';
+            document.getElementById('dlIcon').textContent = '⏳';
+            document.getElementById('dlText').textContent = '正在下载 ' + file;
+            document.getElementById('dlFill').style.width = pct + '%';
+            document.getElementById('dlPct').textContent = pct + '%';
+            document.getElementById('dlSpeed').textContent =
+                App.mbText(bytes) + (total > 0 ? ' / ' + App.mbText(total) : '')
+                + (speedTxt ? ' · ' + speedTxt : '') + ' · 下完自动可用';
+            // 设置页里那一行的小进度条也一起动
+            var rowFill = document.getElementById('dlrowfill_' + file);
+            if (rowFill) { rowFill.style.width = pct + '%'; }
+            App._dlWasRunning = true;
+            if (App._localSpeed !== 1500) { App.startLocalWatcher(true); }
+            return;
+        }
+
+        // 不在下载了：如果刚刚还在下，闪一句结果再收起来
+        if (App._dlWasRunning) {
+            App._dlWasRunning = false;
+            App._dlPrev = null;
+            var done = !!st.modelInstalled;
+            var failed = phase === 'failed';
+            bar.style.display = 'block';
+            bar.style.background = failed ? '#2a1f1c' : '#16261f';
+            document.getElementById('dlIcon').textContent = failed ? '✗' : '✓';
+            document.getElementById('dlText').textContent = failed
+                ? ('下载失败：' + (st.lastError || '原因见日志'))
+                : ('下载完成：' + file + '（在「设置 → 模型版本」里点「使用」就能切过去）');
+            document.getElementById('dlFill').style.width = failed ? '0%' : '100%';
+            document.getElementById('dlPct').textContent = failed ? '' : '100%';
+            document.getElementById('dlSpeed').textContent = '';
+            setTimeout(function() {
+                var b = document.getElementById('dlBar');
+                if (b) b.style.display = 'none';
+            }, failed ? 15000 : 8000);
+            // 清单/设置页跟着刷新（下载完成状态要变）
+            if (App.fillModelsFromConfig) { App.fillModelsFromConfig(); }
+            var settingsOpen = document.getElementById('settingsContent');
+            if (settingsOpen && settingsOpen.innerHTML.indexOf('模型版本') >= 0) {
+                App.renderLlamaTab();
+            }
+        } else {
+            bar.style.display = 'none';
+        }
+        // 空闲下来：放慢轮询，但**不停** —— 后端开机也会自己下权重，停掉就看不见了
+        if (App._localSpeed !== 5000) { App.startLocalWatcher(false); }
+    },
+
+    /** 把字节数说成人话 */
+    mbText: function(b) {
+        b = b || 0;
+        if (b >= 1073741824) { return (b / 1073741824).toFixed(2) + ' GB'; }
+        return Math.floor(b / 1048576) + ' MB';
     },
 
     checkBoxModel: function() {

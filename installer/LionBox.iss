@@ -54,7 +54,9 @@
 ;         用户自己丢进去的 .gguf 也会列出来直接可用
 ; 1.2.5：工作模式**只留「标准」和「极简」**（PTC 和创造模式不再给用户选；老会话照常加载，
 ;         自动按标准模式跑）
-#define AppVersion     "1.2.5"
+; 1.2.6：模型下载**放到前台，带进度条**（文件名 / 百分比 / 已下总量 / 速度 / 剩余时间），
+;         下完或失败都在条上说明；设置页里正在下的那一行也有小进度条
+#define AppVersion     "1.2.6"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
