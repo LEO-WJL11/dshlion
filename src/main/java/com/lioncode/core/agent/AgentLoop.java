@@ -928,7 +928,10 @@ public class AgentLoop {
             .ifPresent(ws -> com.lioncode.core.workspace.WorkspaceContext.set(ws.path()));
         com.lioncode.core.session.SessionContext.set(sessionId);
         try {
-            ToolResult result = tool.execute(toolCall.arguments());
+            // 【派发前先把参数类型转对】文本通道（本地盒子默认）下所有参数都是字符串，
+            // 而工具里写的是 ((Number) args.get("lines")).intValue() → ClassCastException，
+            // 实测 glob_files / head_tail_file / directory_tree / modify_file 全中招。
+            ToolResult result = tool.execute(coerceArguments(tool, toolCall.arguments()));
             
             if (result.success()) {
                 eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_COMPLETE,
@@ -1265,6 +1268,75 @@ public class AgentLoop {
             roundCapBySession.put(sessionId, next);
             log.warn("生成长度撞顶（finish_reason=length），本轮上限 {} → {} - 会话: {}", now, next, sessionId);
         }
+    }
+
+    /**
+     * 按工具自己声明的 JSON Schema，把参数值转成正确的类型。
+     *
+     * <p>【为什么非要在这里做】模型给的是"文本"：文本通道（本地盒子默认）下
+     * {@code <parameter=lines>5</parameter>} 解析出来是字符串 "5"，
+     * 原生通道也可能给 {@code "5"}。而工具里的写法是
+     * {@code ((Number) arguments.get("lines")).intValue()} —— 直接
+     * {@code class java.lang.String cannot be cast to class java.lang.Number}。
+     * 实测（用户装 1.1.8 后跑"把工具都调一遍"）：
+     * <pre>
+     *   glob_files     ❌ 匹配失败: class java.lang.String cannot be cast to class java.lang.Number
+     *   head_tail_file ❌ 读取失败: 同上
+     *   directory_tree ❌ 生成目录树失败: 同上
+     * </pre>
+     * 12 个工具文件都这么取参数（modify_file 的 startLine/endLine 同理）。
+     *
+     * <p>只按 schema 里声明的类型转，不瞎猜：integer→Long、number→Double、
+     * boolean→Boolean、array/object→先当 JSON 解析、string→数字也转成字符串。
+     * 转不了就原样留着，让工具自己报错，这里不抛异常。
+     */
+    private Map<String, Object> coerceArguments(ToolPlugin tool, Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty() || tool == null) {
+            return arguments;
+        }
+        Object defObj = tool.getFunctionDefinition() == null
+            ? null : tool.getFunctionDefinition().get("parameters");
+        if (!(defObj instanceof Map<?, ?> def)) {
+            return arguments;
+        }
+        Object propsObj = def.get("properties");
+        if (!(propsObj instanceof Map<?, ?> props)) {
+            return arguments;
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>(arguments);
+        for (Map.Entry<?, ?> e : props.entrySet()) {
+            String key = String.valueOf(e.getKey());
+            if (!out.containsKey(key) || !(e.getValue() instanceof Map<?, ?> prop)) {
+                continue;
+            }
+            String type = prop.get("type") == null ? "" : String.valueOf(prop.get("type"));
+            Object value = out.get(key);
+            try {
+                if (value instanceof String s) {
+                    String t = s.trim();
+                    // 模型偶尔把值连引号一起写进来：\"5\" / "5"
+                    if (t.length() > 1 && t.startsWith("\"") && t.endsWith("\"")) {
+                        t = t.substring(1, t.length() - 1);
+                    }
+                    switch (type) {
+                        case "integer" -> out.put(key, Long.valueOf(t));
+                        case "number" -> out.put(key, Double.valueOf(t));
+                        case "boolean" -> out.put(key, "true".equalsIgnoreCase(t) || "1".equals(t));
+                        case "array", "object" -> {
+                            if (t.startsWith("[") || t.startsWith("{")) {
+                                out.put(key, objectMapper.readValue(t, Object.class));
+                            }
+                        }
+                        default -> { /* string：原样 */ }
+                    }
+                } else if (value instanceof Number n && "string".equals(type)) {
+                    out.put(key, String.valueOf(n));
+                }
+            } catch (Exception ex) {
+                log.debug("参数 {} 按 {} 转换失败，原样传给工具: {}", key, type, value);
+            }
+        }
+        return out;
     }
 
     /** 参数指纹：用来判断"是不是一模一样的调用"（喂给 ToolCallGuard） */
