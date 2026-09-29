@@ -85,6 +85,37 @@ public class SessionController {
     }
 
     /**
+     * 给这个对话换工作区（界面上对话列表里每个对话都能选）。
+     *
+     * <p>只改绑定关系；历史消息不动（里面的路径是绝对路径）。
+     * 之后这个对话里的相对路径会基于新工作区解析。
+     */
+    @PutMapping("/{sessionId}/workspace")
+    public ApiResponse<SessionDto> moveSessionToWorkspace(@PathVariable("sessionId") String sessionId,
+                                                          @RequestBody MoveWorkspaceRequest request) {
+        if (sessionManager.getSession(sessionId).isEmpty()) {
+            return ApiResponse.error("会话不存在: " + sessionId);
+        }
+        if (request == null || request.workspaceId() == null || request.workspaceId().isBlank()) {
+            return ApiResponse.error("缺少 workspaceId");
+        }
+        if (workspaceManager.getWorkspace(request.workspaceId()).isEmpty()) {
+            return ApiResponse.error("工作区不存在: " + request.workspaceId());
+        }
+        boolean ok = sessionManager.moveSessionToWorkspace(sessionId, request.workspaceId());
+        if (!ok) {
+            return ApiResponse.error("换工作区失败");
+        }
+        return sessionManager.getSession(sessionId)
+            .map(s -> ApiResponse.ok("已换到新工作区", new SessionDto(s.sessionId(), s.workspaceId(),
+                sessionManager.getEffectiveMode(s.sessionId()).getCode(), s.createdAt(), null, s.name())))
+            .orElseGet(() -> ApiResponse.error("会话不存在"));
+    }
+
+    /** 换工作区请求体 */
+    public record MoveWorkspaceRequest(String workspaceId) {}
+
+    /**
      * 销毁会话
      */
     @DeleteMapping("/{sessionId}")

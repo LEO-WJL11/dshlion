@@ -117,6 +117,37 @@ public class SessionManager {
     }
 
     /**
+     * 把会话换到另一个工作区（界面上"给这个对话选工作区"用的）。
+     *
+     * <p>只改绑定关系，不动已有对话内容 —— 历史里已经产生的路径是绝对路径，
+     * 换工作区只影响**之后**的相对路径解析。
+     *
+     * @return 是否成功（会话不存在或工作区为空时返回 false）
+     */
+    public synchronized boolean moveSessionToWorkspace(String sessionId, String workspaceId) {
+        Session old = sessions.get(sessionId);
+        if (old == null) {
+            log.warn("换工作区失败，会话不存在: {}", sessionId);
+            return false;
+        }
+        if (workspaceId == null || workspaceId.isBlank()) {
+            log.warn("换工作区失败，工作区为空: {}", sessionId);
+            return false;
+        }
+        if (workspaceId.equals(old.workspaceId())) {
+            return true;   // 没变，直接当成功
+        }
+        Session updated = new Session(old.sessionId(), workspaceId, old.mode(),
+            old.createdAt(), old.name());
+        sessions.put(sessionId, updated);
+        if (persistence != null) {
+            persistence.saveSession(updated);
+        }
+        log.info("会话已换工作区: {} → {}", sessionId, workspaceId);
+        return true;
+    }
+
+    /**
      * 仅在会话还没有名字时写入（模型自动生成用，避免覆盖用户自己改的名字）
      */
     public synchronized boolean setTitleIfAbsent(String sessionId, String name) {

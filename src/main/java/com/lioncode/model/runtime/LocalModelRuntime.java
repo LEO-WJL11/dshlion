@@ -50,6 +50,13 @@ public class LocalModelRuntime {
 
     private static final Logger log = LoggerFactory.getLogger(LocalModelRuntime.class);
 
+    /** 设置页存下来的 llama 参数（键名见下面的 effective* 方法） */
+    private final com.lioncode.model.config.AppConfigStore configStore;
+
+    public LocalModelRuntime(com.lioncode.model.config.AppConfigStore configStore) {
+        this.configStore = configStore;
+    }
+
     @Value("${lionbox.runtime.host:127.0.0.1}")
     private String host;
 
@@ -113,6 +120,107 @@ public class LocalModelRuntime {
     /** 是否启用惰性加载（关掉就退回"启动即加载"的老行为） */
     @Value("${lionbox.runtime.lazy-load:true}")
     private boolean lazyLoad;
+
+    // ---- 下面这些是"设置页能改"的参数（原来没暴露的） ----
+    /** CPU 线程数（0 = 让 llama.cpp 自己决定） */
+    @Value("${lionbox.runtime.threads:0}")
+    private int threads;
+
+    /** 批处理大小（-b）/ 微批（-ub） */
+    @Value("${lionbox.runtime.batch-size:2048}")
+    private int batchSize;
+
+    @Value("${lionbox.runtime.ubatch-size:512}")
+    private int ubatchSize;
+
+    @Value("${lionbox.runtime.top-k:40}")
+    private int topK;
+
+    @Value("${lionbox.runtime.min-p:0.05}")
+    private double minP;
+
+    @Value("${lionbox.runtime.seed:-1}")
+    private long seed;
+
+    // ================= 设置页读写用的"有效值" =================
+    // 规则：app-config.json 的 llama 段优先，没有就用 application.yml 的默认值。
+    // 键名就是命令行参数的语义名（modelFile / ctxSize / ngl / kvCacheTypeK …
+
+    /** 读一个字符串参数（设置页存的优先） */
+    private String cfgStr(String key, String fallback) {
+        Object v = configStore == null ? null : configStore.llamaConfig().get(key);
+        if (v == null) {
+            return fallback;
+        }
+        String s = String.valueOf(v).trim();
+        return s.isEmpty() ? fallback : s;
+    }
+
+    /** 读一个整数参数 */
+    private int cfgInt(String key, int fallback) {
+        try {
+            String s = cfgStr(key, null);
+            return s == null ? fallback : Integer.parseInt(s);
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    /** 读一个小数参数 */
+    private double cfgDouble(String key, double fallback) {
+        try {
+            String s = cfgStr(key, null);
+            return s == null ? fallback : Double.parseDouble(s);
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    /** 读一个开关参数（true/false/1/0/on/off 都认） */
+    private boolean cfgBool(String key, boolean fallback) {
+        String s = cfgStr(key, null);
+        if (s == null) {
+            return fallback;
+        }
+        s = s.toLowerCase();
+        return s.equals("true") || s.equals("1") || s.equals("on") || s.equals("yes");
+    }
+
+    /**
+     * 当前生效的模型文件名（安装时选的 / 设置里改的优先，否则用配置默认的）。
+     * 这是"安装时选模型"能生效的关键：只需要改这一个值。
+     */
+    public String effectiveModelFile() {
+        return cfgStr("modelFile", modelFile);
+    }
+
+    /** 当前生效的全部参数（给设置页看，也给日志看） */
+    public java.util.Map<String, Object> effectiveConfig() {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("modelFile", effectiveModelFile());
+        m.put("modelName", modelName);
+        m.put("host", cfgStr("host", host));
+        m.put("port", cfgInt("port", port));
+        m.put("ctxSize", cfgInt("ctxSize", ctxSize));
+        m.put("ngl", cfgInt("ngl", 999));
+        m.put("kvCacheTypeK", cfgStr("kvCacheTypeK", cfgStr("kvCacheType", kvCacheType)));
+        m.put("kvCacheTypeV", cfgStr("kvCacheTypeV", cfgStr("kvCacheType", kvCacheType)));
+        m.put("flashAttn", cfgBool("flashAttn", flashAttn));
+        m.put("parallelSlots", cfgInt("parallelSlots", parallelSlots));
+        m.put("threads", cfgInt("threads", threads));
+        m.put("batchSize", cfgInt("batchSize", batchSize));
+        m.put("ubatchSize", cfgInt("ubatchSize", ubatchSize));
+        m.put("temperature", cfgDouble("temperature", temperature));
+        m.put("topP", cfgDouble("topP", topP));
+        m.put("topK", cfgInt("topK", topK));
+        m.put("minP", cfgDouble("minP", minP));
+        m.put("repeatPenalty", cfgDouble("repeatPenalty", repeatPenalty));
+        m.put("repeatLastN", cfgInt("repeatLastN", repeatLastN));
+        m.put("seed", cfgInt("seed", (int) seed));
+        m.put("maxPredict", cfgInt("maxPredict", maxPredict));
+        m.put("extraArgs", cfgStr("extraArgs", ""));
+        return m;
+    }
 
     // ---- 模型自动下载（首次运行的"装完即用"）----
     // 安装包不再内置 8.9GB 权重，改为首次用到时从 ModelScope 拉取。
@@ -264,7 +372,7 @@ public class LocalModelRuntime {
                 log.error("本地模型运行时不可用: exe={}, model={}", exe, model);
                 throw new IllegalStateException(
                     "本地模型运行时不可用：请确认程序目录下有 runtime-vulkan\\llama-server.exe 与 "
-                        + modelFile + "；或切换到「自定义 API」模式。"
+                        + effectiveModelFile() + "；或切换到「自定义 API」模式。"
                         + (autoDownload ? "" : "（当前已关闭自动下载）"));
             }
             starting.set(true);
@@ -390,7 +498,8 @@ public class LocalModelRuntime {
     /** 权重不在就自动下载；下不了就返回 null，让上层走原有的报错路径。 */
     private Path downloadModelIfAllowed() {
         if (!autoDownload) {
-            log.warn("本地没有权重 {}，且已关闭自动下载（lionbox.runtime.auto-download=false）", modelFile);
+            log.warn("本地没有权重 {}，且已关闭自动下载（lionbox.runtime.auto-download=false）",
+                effectiveModelFile());
             return null;
         }
         Path target = downloadTarget();
@@ -412,11 +521,48 @@ public class LocalModelRuntime {
     }
 
     /** 权重放哪：优先程序目录（可写的话），否则退到 ~/.lioncode/models。 */
+    /**
+     * 可选的模型版本（ModelScope 仓库 lionnezha/lion-models 里实际存在的三份）。
+     *
+     * <p>安装包的"选择模型版本"页和设置页的"模型"一节都用这份清单；
+     * 换模型只要把 {@code llama.modelFile} 改成这里的 file 即可。
+     */
+    public record ModelChoice(String file, String label, double sizeGb, String note) {}
+
+    /** 可选模型清单（体积是仓库里报的实际大小） */
+    public static final java.util.List<ModelChoice> AVAILABLE_MODELS = java.util.List.of(
+        new ModelChoice("lion-merged-Q8_0.gguf", "Q8_0（最高质量·默认）", 8.87,
+            "原版精度，回答质量最好；下载 8.87 GB，解码约 11 token/s"),
+        new ModelChoice("lion-merged-Q4_K_M.gguf", "Q4_K_M（平衡·推荐）", 5.24,
+            "体积小 40%，解码约 1.7 倍快；质量略降"),
+        new ModelChoice("lion-merged-IQ4_XS.gguf", "IQ4_XS（最小最快）", 4.87,
+            "体积最小、速度最快；质量下降最明显，适合只看响应速度的场合")
+    );
+
+    /** 这个模型文件本地是否已经有了（设置页/模型清单里用来标"已下载"）。 */
+    public boolean isModelDownloaded(String file) {
+        if (file == null || file.isBlank()) {
+            return false;
+        }
+        try {
+            long min = minModelBytes;
+            for (Path dir : appDirs()) {
+                Path p = dir.resolve(file);
+                if (Files.isRegularFile(p) && Files.size(p) >= min) {
+                    return true;
+                }
+            }
+            Path home = Path.of(System.getProperty("user.home", "."), ".lioncode", "models", file);
+            return Files.isRegularFile(home) && Files.size(home) >= min;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private Path downloadTarget() {
-        for (Path dir : appDirs()) {
-            try {
+        for (Path dir : appDirs()) {            try {
                 if (Files.isDirectory(dir) && Files.isWritable(dir)) {
-                    return dir.resolve(modelFile);
+                    return dir.resolve(effectiveModelFile());
                 }
             } catch (Exception ignored) {
                 // 下一个候选
@@ -425,7 +571,7 @@ public class LocalModelRuntime {
         Path home = Path.of(System.getProperty("user.home", "."), ".lioncode", "models");
         try {
             Files.createDirectories(home);
-            return home.resolve(modelFile);
+            return home.resolve(effectiveModelFile());
         } catch (IOException e) {
             return null;
         }
@@ -445,7 +591,7 @@ public class LocalModelRuntime {
         Path part = target.resolveSibling(target.getFileName() + ".part");
         long already = Files.isRegularFile(part) ? Files.size(part) : 0L;
         String url = "https://modelscope.cn/api/v1/models/" + modelRepo + "/repo?Revision="
-            + modelRevision + "&FilePath=" + URLEncoder.encode(modelFile, StandardCharsets.UTF_8);
+            + modelRevision + "&FilePath=" + URLEncoder.encode(effectiveModelFile(), StandardCharsets.UTF_8);
 
         HttpClient client = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -461,7 +607,8 @@ public class LocalModelRuntime {
             client.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
         int code = resp.statusCode();
         if (code != 200 && code != 206) {
-            throw new IOException("HTTP " + code + "（检查仓库 " + modelRepo + " 与文件名 " + modelFile + "）");
+            throw new IOException("HTTP " + code + "（检查仓库 " + modelRepo + " 与文件名 "
+                    + effectiveModelFile() + "）");
         }
         long total = resp.headers().firstValueAsLong("Content-Length").orElse(-1L);
         boolean append = code == 206 && already > 0;
@@ -470,7 +617,7 @@ public class LocalModelRuntime {
         }
         downloadTotal = total;
         downloadBytes = already;
-        log.info("开始下载模型 {}（仓库 {}，已下 {} MB{}）", modelFile, modelRepo,
+        log.info("开始下载模型 {}（仓库 {}，已下 {} MB{}）", effectiveModelFile(), modelRepo,
             already / 1024 / 1024,
             total > 0 ? "，共约 " + (total / 1024 / 1024) + " MB" : "");
 
@@ -532,7 +679,7 @@ public class LocalModelRuntime {
         }
         for (Path dir : appDirs()) {
             for (Path base : new Path[] {dir, dir.resolve("models")}) {
-                Path p = base.resolve(modelFile);
+                Path p = base.resolve(effectiveModelFile());
                 if (Files.isRegularFile(p)) {
                     return p;
                 }
@@ -541,7 +688,7 @@ public class LocalModelRuntime {
                 // 直接用目录里现成的 .gguf，并把换了哪个文件写进日志。
                 Path any = pickAnyGguf(base);
                 if (any != null) {
-                    log.warn("未找到配置的模型 {}，自动改用 {}", modelFile, any.getFileName());
+                    log.warn("未找到配置的模型 {}，自动改用 {}", effectiveModelFile(), any.getFileName());
                     return any;
                 }
             }
@@ -585,6 +732,43 @@ public class LocalModelRuntime {
     }
 
     /**
+     * 把 "‑‑no-mmap --flash-attn on" 这样的自由参数串拆成一个个参数。
+     * 支持用引号把带空格的值括起来（例如 --chat-template-file "C:\\my dir\\t.jinja"）。
+     */
+    static java.util.List<String> splitArgs(String raw) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return out;
+        }
+        StringBuilder cur = new StringBuilder();
+        boolean inQuote = false;
+        char quoteChar = 0;
+        for (char c : raw.toCharArray()) {
+            if (inQuote) {
+                if (c == quoteChar) {
+                    inQuote = false;
+                } else {
+                    cur.append(c);
+                }
+            } else if (c == '"' || c == '\'') {
+                inQuote = true;
+                quoteChar = c;
+            } else if (Character.isWhitespace(c)) {
+                if (cur.length() > 0) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                }
+            } else {
+                cur.append(c);
+            }
+        }
+        if (cur.length() > 0) {
+            out.add(cur.toString());
+        }
+        return out;
+    }
+
+    /**
      * 拉起 llama-server 并等它健康。
      *
      * @param ngl 放到显卡上的层数（999=全部；0=纯 CPU）
@@ -597,7 +781,7 @@ public class LocalModelRuntime {
         cmd.add("-ngl");
         cmd.add(String.valueOf(ngl));
         cmd.add("-c");
-        cmd.add(String.valueOf(ctxSize));
+        cmd.add(String.valueOf(cfgInt("ctxSize", ctxSize)));
 
         // ---- KV cache 量化 ----
         // 256K 上下文下 KV cache 是显存大头。实测（32K 对照）：
@@ -605,52 +789,98 @@ public class LocalModelRuntime {
         //   q4_0 KV buffer =  288 MiB   （3.56 倍压缩 = 2.0 / 0.5625）
         // 注意：量化 KV 必须开 flash attention，否则 llama.cpp 会直接拒绝该类型，
         // 所以下面看到量化类型就强制把 -fa 打开。
-        boolean quantizedKv = kvCacheType != null && !kvCacheType.isBlank()
-            && !"f16".equalsIgnoreCase(kvCacheType) && !"bf16".equalsIgnoreCase(kvCacheType);
+        String kvK = cfgStr("kvCacheTypeK", cfgStr("kvCacheType", kvCacheType));
+        String kvV = cfgStr("kvCacheTypeV", cfgStr("kvCacheType", kvCacheType));
+        boolean quantizedKv = kvK != null && !kvK.isBlank()
+            && !"f16".equalsIgnoreCase(kvK) && !"bf16".equalsIgnoreCase(kvK);
         if (quantizedKv) {
             cmd.add("-ctk");
-            cmd.add(kvCacheType);
+            cmd.add(kvK);
             cmd.add("-ctv");
-            cmd.add(kvCacheType);
+            cmd.add(kvV);
         }
-        if (quantizedKv || flashAttn) {
+        if (quantizedKv || cfgBool("flashAttn", flashAttn)) {
             cmd.add("-fa");
             cmd.add("on");
         }
 
         // 每个 slot 独占整个上下文：默认多 slot 会把 -c 平分，256K 就只剩几万了
         cmd.add("-np");
-        cmd.add(String.valueOf(parallelSlots));
+        cmd.add(String.valueOf(cfgInt("parallelSlots", parallelSlots)));
+
+        // ---- 线程 / 批处理（原来固定用默认，现在设置页可改）----
+        int th = cfgInt("threads", threads);
+        if (th > 0) {
+            cmd.add("-t");
+            cmd.add(String.valueOf(th));
+            cmd.add("-tb");
+            cmd.add(String.valueOf(th));
+        }
+        int bs = cfgInt("batchSize", batchSize);
+        if (bs > 0) {
+            cmd.add("-b");
+            cmd.add(String.valueOf(bs));
+        }
+        int ub = cfgInt("ubatchSize", ubatchSize);
+        if (ub > 0) {
+            cmd.add("-ub");
+            cmd.add(String.valueOf(ub));
+        }
 
         // ---- 采样默认值 ----
         // 别省这一步：llama-server 出厂默认是 temp 0.80 + repeat-penalty 1.00（=关闭），
         // 实测这个 9B 微调模型在这种配置下会**跑飞** —— 一路重复输出工具调用分片，
         // 生成 3000+ token 不停，请求直接撞上读超时。
         // 降低温度 + 打开重复惩罚后即稳定。
-        if (temperature >= 0) {
+        double effTemp = cfgDouble("temperature", temperature);
+        if (effTemp >= 0) {
             cmd.add("--temp");
-            cmd.add(String.valueOf(temperature));
+            cmd.add(String.valueOf(effTemp));
         }
-        if (topP > 0) {
+        double effTopP = cfgDouble("topP", topP);
+        if (effTopP > 0) {
             cmd.add("--top-p");
-            cmd.add(String.valueOf(topP));
+            cmd.add(String.valueOf(effTopP));
         }
-        if (repeatPenalty > 0) {
+        int effTopK = cfgInt("topK", topK);
+        if (effTopK > 0) {
+            cmd.add("--top-k");
+            cmd.add(String.valueOf(effTopK));
+        }
+        double effMinP = cfgDouble("minP", minP);
+        if (effMinP > 0) {
+            cmd.add("--min-p");
+            cmd.add(String.valueOf(effMinP));
+        }
+        double effRepeat = cfgDouble("repeatPenalty", repeatPenalty);
+        if (effRepeat > 0) {
             cmd.add("--repeat-penalty");
-            cmd.add(String.valueOf(repeatPenalty));
+            cmd.add(String.valueOf(effRepeat));
             cmd.add("--repeat-last-n");
-            cmd.add(String.valueOf(repeatLastN));
+            cmd.add(String.valueOf(cfgInt("repeatLastN", repeatLastN)));
+        }
+        int effSeed = cfgInt("seed", (int) seed);
+        if (effSeed >= 0) {
+            cmd.add("--seed");
+            cmd.add(String.valueOf(effSeed));
         }
         // 单次生成上限：默认 -1 会把整个上下文写满（256K！），必须封顶
-        if (maxPredict > 0) {
+        int effMaxPredict = cfgInt("maxPredict", maxPredict);
+        if (effMaxPredict > 0) {
             cmd.add("-n");
-            cmd.add(String.valueOf(maxPredict));
+            cmd.add(String.valueOf(effMaxPredict));
+        }
+
+        // ---- 自由参数：设置页里可以填任何我们没做的开关 ----
+        String extra = cfgStr("extraArgs", "");
+        if (!extra.isBlank()) {
+            cmd.addAll(splitArgs(extra));
         }
 
         cmd.add("--host");
-        cmd.add(host);
+        cmd.add(cfgStr("host", host));
         cmd.add("--port");
-        cmd.add(String.valueOf(port));
+        cmd.add(String.valueOf(cfgInt("port", port)));
 
         phase.set(ngl > 0 ? "starting-gpu" : "starting-cpu");
         log.info("正在拉起本地模型运行时：{}（-ngl {}，上下文 {}，KV {}，slot {}，temp {}，repeat-penalty {}，最多 {} token）",

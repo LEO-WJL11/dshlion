@@ -101,6 +101,43 @@ public class AppConfigStore {
             log.error("加载应用配置失败: {}", configFile, e);
         }
         applyDefaults();
+        applyInstallerModelChoice();
+    }
+
+    /**
+     * 应用安装包里选的模型版本。
+     *
+     * <p>安装程序在选择模型那一页会写一个标记文件（{@code ~/.lioncode/install-model.txt}，
+     * 内容就是模型文件名）。这里在启动时读它：
+     * <ul>
+     *   <li>和上次应用过的选择不同 → 写进 {@code llama.modelFile} 并记下这次的选择；</li>
+     *   <li>相同 → 什么都不做（这样用户在设置页里改过的模型不会被安装包的选择反复覆盖）。</li>
+     * </ul>
+     * 标记文件不删：重装时选了别的版本才能再次生效。
+     */
+    private void applyInstallerModelChoice() {
+        try {
+            Path marker = Path.of(System.getProperty("user.home"), ".lioncode", "install-model.txt");
+            if (!Files.isRegularFile(marker)) {
+                return;
+            }
+            String chosen = Files.readString(marker).trim();
+            if (chosen.isEmpty()) {
+                return;
+            }
+            String applied = str(llamaConfig().get("installChoice")).trim();
+            if (chosen.equals(applied)) {
+                return;   // 这次安装的选择已经应用过了
+            }
+            Map<String, Object> merged = new java.util.LinkedHashMap<>(llamaConfig());
+            merged.put("modelFile", chosen);
+            merged.put("installChoice", chosen);
+            config.put("llama", merged);
+            saveToDisk();
+            log.info("已应用安装时选择的模型: {}", chosen);
+        } catch (Exception e) {
+            log.warn("应用安装时选择的模型失败（不影响启动）: {}", e.getMessage());
+        }
     }
 
     /**
@@ -416,6 +453,40 @@ public class AppConfigStore {
     public Map<String, Object> getMap(String key) {
         Object value = config.get(key);
         return value instanceof Map ? (Map<String, Object>) value : Map.of();
+    }
+
+    /**
+     * llama.cpp 运行参数（设置页里那些输入框的值都存这儿）。
+     *
+     * <p>键名与 llama-server 的命令行参数一一对应（见 {@code LocalModelRuntime} 的注释），
+     * 没存过的键就用 application.yml 里的默认值。留一个 {@code extraArgs}
+     * 让用户能填任何我们没做的参数 —— 这样"所有配置都能改"才算真的成立。
+     */
+    public Map<String, Object> llamaConfig() {
+        return getMap("llama");
+    }
+
+    /** 合并写入 llama 参数（只覆盖传进来的键，其余不动） */
+    public synchronized void updateLlamaConfig(Map<String, Object> updates) {
+        if (updates == null || updates.isEmpty()) {
+            return;
+        }
+        Map<String, Object> merged = new java.util.LinkedHashMap<>(getMap("llama"));
+        for (Map.Entry<String, Object> e : updates.entrySet()) {
+            if (e.getValue() == null) {
+                merged.remove(e.getKey());
+            } else {
+                merged.put(e.getKey(), e.getValue());
+            }
+        }
+        config.put("llama", merged);
+        saveToDisk();
+    }
+
+    /** 当前选用的模型文件名（安装时选的、或设置里改的；没有就返回 null 用默认） */
+    public String llamaModelFile() {
+        String v = str(llamaConfig().get("modelFile")).trim();
+        return v.isEmpty() ? null : v;
     }
 
     /**

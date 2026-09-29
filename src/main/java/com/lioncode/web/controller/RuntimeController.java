@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -198,6 +199,98 @@ public class RuntimeController {
     @GetMapping("/local")
     public ApiResponse<LocalModelRuntime.Status> localStatus() {
         return ApiResponse.ok(localRuntime.status());
+    }
+
+    /**
+     * 读当前生效的 llama.cpp 启动参数（设置页用）。
+     */
+    @GetMapping("/local/config")
+    public ApiResponse<Map<String, Object>> localConfig() {
+        Map<String, Object> data = new java.util.LinkedHashMap<>(localRuntime.effectiveConfig());
+        data.put("running", localRuntime.isRunning());
+        data.put("status", localRuntime.status());
+        data.put("stored", configStore.llamaConfig());
+        return ApiResponse.ok(data);
+    }
+
+    /**
+     * 改 llama.cpp 启动参数。**改完需要重启本地模型才生效**（界面会提示）。
+     * 传什么改什么，没传的保持原样；传空字符串表示删掉这项（回到默认值）。
+     */
+    @PostMapping("/local/config")
+    public ApiResponse<Map<String, Object>> updateLocalConfig(@RequestBody Map<String, Object> updates) {
+        log.info("用户修改 llama.cpp 参数: {}", updates == null ? "(空)" : updates.keySet());
+        configStore.updateLlamaConfig(updates);
+        Map<String, Object> data = new java.util.LinkedHashMap<>(localRuntime.effectiveConfig());
+        data.put("running", localRuntime.isRunning());
+        data.put("needRestart", localRuntime.isRunning());
+        return ApiResponse.ok("参数已保存" + (localRuntime.isRunning() ? "，重启本地模型后生效" : ""), data);
+    }
+
+    /**
+     * 可下载的模型清单（安装时的选择项也是这几份）。
+     */
+    @GetMapping("/local/models")
+    public ApiResponse<List<Map<String, Object>>> localModels() {
+        List<Map<String, Object>> list = new java.util.ArrayList<>();
+        String current = localRuntime.effectiveModelFile();
+        for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("file", c.file());
+            m.put("label", c.label());
+            m.put("sizeGb", c.sizeGb());
+            m.put("note", c.note());
+            m.put("current", c.file().equals(current));
+            m.put("downloaded", localRuntime.isModelDownloaded(c.file()));
+            list.add(m);
+        }
+        return ApiResponse.ok(list);
+    }
+
+    /**
+     * 换模型（可选同时重启）。
+     *
+     * <p>界面上"设置 → 模型"里选一个：没下载的会先下（几百 MB 到 9 GB，看量化），
+     * 下完自动重启运行时。安装包里选的那一项也是写到同一个配置键。
+     */
+    @PostMapping("/local/model")
+    public ApiResponse<LocalModelRuntime.Status> switchModel(@RequestBody Map<String, Object> body) {
+        String file = body == null ? null : str(body.get("file"));
+        if (file == null || file.isBlank()) {
+            return ApiResponse.error("缺少 file（要切换到的模型文件名）");
+        }
+        String matched = null;
+        for (LocalModelRuntime.ModelChoice c : LocalModelRuntime.AVAILABLE_MODELS) {
+            if (c.file().equals(file)) {
+                matched = c.file();
+                break;
+            }
+        }
+        if (matched == null) {
+            return ApiResponse.error("不认识的模型: " + file + "（可选：" + LocalModelRuntime.AVAILABLE_MODELS.stream()
+                .map(LocalModelRuntime.ModelChoice::file).reduce((a, b) -> a + "、" + b).orElse("") + "）");
+        }
+        log.info("用户切换本地模型: {} → {}", localRuntime.effectiveModelFile(), matched);
+        configStore.updateLlamaConfig(Map.of("modelFile", matched));
+        localRuntime.stop();
+        LocalModelRuntime.Status st = body.get("download") != null
+            && !"false".equalsIgnoreCase(str(body.get("download")))
+            ? localRuntime.download() : localRuntime.status();
+        return ApiResponse.ok("已切换到 " + matched + (st.modelInstalled() ? "（权重已就绪）" : "（尚未下载）"), st);
+    }
+
+    /**
+     * 重启本地模型（改完参数用它生效）。
+     */
+    @PostMapping("/local/restart")
+    public ApiResponse<LocalModelRuntime.Status> restartLocal() {
+        log.info("用户请求重启本地模型（参数变更生效）");
+        localRuntime.stop();
+        LocalModelRuntime.Status st = localRuntime.start();
+        if (!st.running()) {
+            return new ApiResponse<>(false, "重启失败：" + st.lastError(), st, st.lastError());
+        }
+        return ApiResponse.ok("本地模型已按新参数重启", st);
     }
 
     /**

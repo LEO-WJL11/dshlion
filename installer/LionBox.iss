@@ -44,7 +44,9 @@
 ; 1.1.17：git_remote 支持 get-url/set-url；execute_command 把 Unix 写法翻成 PowerShell
 ;          （ls -la / rm -rf / cp -r / mkdir -p / grep / touch / which / ps aux 等）
 ; 1.1.18：写文件保留原编码（GBK 的 ANSI 中文文件改完仍是 GBK，不会被悄悄转成 UTF-8）
-#define AppVersion     "1.1.18"
+; 1.2.0（功能版）：安装时可选模型版本（Q8_0/Q4_K_M/IQ4_XS）；设置页可改 llama.cpp 全部参数；
+;                 对话列表按工作区分组成可收起的选项卡，每个对话能选工作区
+#define AppVersion     "1.2.0"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
@@ -174,4 +176,58 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   StopRunningLionBox();
   Result := '';
+end;
+
+// ==================== 选择模型版本 ====================
+// 安装包里不再内置权重，首次用到时从 ModelScope 下载。三份量化体积差一倍，
+// 让用户在装的时候就选好（默认 Q8_0，质量最好）。
+// 选择写到 ~/.lioncode/install-model.txt，应用启动时读它并写进 llama.modelFile。
+var
+  ModelPage: TInputOptionWizardPage;
+
+procedure InitializeWizard();
+begin
+  ModelPage := CreateInputOptionPage(wpSelectTasks,
+    '选择模型版本',
+    '要下载哪一份模型权重？',
+    '安装包里不含权重（所以只有 72 MB）。首次使用本地模型时会自动下载你选的这一份，' +
+    '之后可以在「设置 → 本地模型 / llama.cpp」里随时换。',
+    True, False);
+  ModelPage.Add('Q8_0 —— 质量最好（推荐，8.87 GB）');
+  ModelPage.Add('Q4_K_M —— 体积小 40%、速度快约 1.7 倍（5.24 GB）');
+  ModelPage.Add('IQ4_XS —— 最小最快，质量下降明显（4.87 GB）');
+  ModelPage.SelectedValueIndex := 0;
+end;
+
+// 把选择落盘。静默安装（/VERYSILENT）时向导页不会创建，此时按默认 Q8_0 写。
+procedure WriteModelChoice();
+var
+  Dir, Path, Choice: String;
+begin
+  if ModelPage = nil then
+    Choice := 'lion-merged-Q8_0.gguf'
+  else
+    case ModelPage.SelectedValueIndex of
+      1: Choice := 'lion-merged-Q4_K_M.gguf';
+      2: Choice := 'lion-merged-IQ4_XS.gguf';
+    else
+      Choice := 'lion-merged-Q8_0.gguf';
+    end;
+
+  // 注意：Inno 没有 {userprofile} 这个常量（实测会报 Unknown constant）。
+  // 用 GetEnv 读环境变量，和应用侧 System.getProperty("user.home") 取的是同一个目录。
+  Dir := GetEnv('USERPROFILE') + '\.lioncode';
+  if not DirExists(Dir) then
+    ForceDirectories(Dir);
+  Path := Dir + '\install-model.txt';
+  if SaveStringToFile(Path, Choice, False) then
+    Log('已记录模型选择: ' + Choice)
+  else
+    Log('写入模型选择失败: ' + Path);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    WriteModelChoice();
 end;
