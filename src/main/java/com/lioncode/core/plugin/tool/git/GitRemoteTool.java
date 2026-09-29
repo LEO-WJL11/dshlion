@@ -41,8 +41,8 @@ public class GitRemoteTool extends AbstractToolPlugin {
 
             ProcessBuilder pb;
             switch (action) {
-                case "list" -> pb = new ProcessBuilder("git", "remote", "-v");
-                case "show" -> pb = new ProcessBuilder("git", "remote", "show", "origin");
+                case "list" -> pb = new ProcessBuilder(gitExecutable(), "remote", "-v");
+                case "show" -> pb = new ProcessBuilder(gitExecutable(), "remote", "show", "origin");
                 default -> { return error("仅支持list/show操作"); }
             }
 

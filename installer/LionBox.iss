@@ -30,7 +30,9 @@
 ; 1.1.9：修文本通道下的参数类型 bug（数值参数以字符串给进来时工具直接 ClassCastException）
 ; 1.1.10：去掉 10 分钟硬超时（跑到第 70 个工具被砍断）+ 修 yaml_process/string_utils/git_stash/
 ;          execute_command/数值参数等失败
-#define AppVersion     "1.1.10"
+; 1.1.11：escape_string/timestamp/git_* 工具修复（正文塞进 target、strftime 被拆坏、
+;          目录不存在被误报成没装 git）+ delete_file 支持 recursive + 工具名写错给候选
+#define AppVersion     "1.1.11"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

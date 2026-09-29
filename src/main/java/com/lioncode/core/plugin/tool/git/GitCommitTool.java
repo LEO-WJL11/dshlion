@@ -49,13 +49,13 @@ public class GitCommitTool extends AbstractToolPlugin {
 
             // 先执行git add
             if (addAll) {
-                ProcessBuilder addPb = new ProcessBuilder("git", "add", "-A");
+                ProcessBuilder addPb = new ProcessBuilder(gitExecutable(), "add", "-A");
                 addPb.directory(new File(path));
                 addPb.start().waitFor(30, TimeUnit.SECONDS);
             }
 
             // 执行git commit
-            ProcessBuilder pb = new ProcessBuilder("git", "commit", "-m", message);
+            ProcessBuilder pb = new ProcessBuilder(gitExecutable(), "commit", "-m", message);
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
 

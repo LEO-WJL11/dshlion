@@ -94,6 +94,82 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
         return val instanceof String s ? s : defaultValue;
     }
 
+    /** 是不是 Windows。 */
+    protected static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    private static String cachedGit;
+
+    /**
+     * 找到 git 可执行文件。
+     *
+     * <p>为什么不能直接写 "git"：LionBox 是从开始菜单/注册表拉起来的 GUI 程序，
+     * 它的 PATH 常常比用户在终端里的短，`new ProcessBuilder("git")` 可能直接找不到；
+     * 另外用户也可能是"便携版 Git"。所以按顺序找：GIT_EXE 环境变量 → PATH → 常见安装位置。
+     */
+    protected static String gitExecutable() {
+        if (cachedGit != null) {
+            return cachedGit;
+        }
+        String fromEnv = System.getenv("GIT_EXE");
+        if (fromEnv != null && !fromEnv.isBlank() && new java.io.File(fromEnv).isFile()) {
+            return cachedGit = fromEnv;
+        }
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        candidates.add("C:\\Program Files\\Git\\cmd\\git.exe");
+        candidates.add("C:\\Program Files (x86)\\Git\\cmd\\git.exe");
+        candidates.add("C:\\Program Files\\Git\\bin\\git.exe");
+        String local = System.getenv("LOCALAPPDATA");
+        if (local != null) {
+            candidates.add(local + "\\Programs\\Git\\cmd\\git.exe");
+        }
+        for (String c : candidates) {
+            if (new java.io.File(c).isFile()) {
+                return cachedGit = c;
+            }
+        }
+        return cachedGit = "git";   // 交给 PATH
+    }
+
+    /**
+     * 跑 git 命令前的目录检查：目录不存在时给出能照着做的错误。
+     *
+     * <p>原来直接把不存在的目录塞给 ProcessBuilder，用户看到的是
+     * {@code Cannot run program "git" (in directory "..."): CreateProcess error=267, 目录名称无效}，
+     * 模型据此得出"本机未安装 git"的错误结论（真实原因只是目录没建）。
+     */
+    protected String checkGitDirectory(String path) {
+        java.io.File dir = new java.io.File(path);
+        if (!dir.isDirectory()) {
+            return "目录不存在: " + path + "（先用 create_directory 建目录，或直接 git_init 建仓库；"
+                + "git 命令必须在真实存在的目录里执行）";
+        }
+        return null;
+    }
+
+    /**
+     * 把 git 相关异常翻译成"能照着做"的提示。
+     *
+     * <p>实测（用户日志）：在还没建的目录里跑 git，报的是
+     * {@code Cannot run program "git" (in directory "…\.git_test"): CreateProcess error=267, 目录名称无效}，
+     * 模型据此得出了"本机未安装 git"的错误结论，后面一连串 git 工具都不敢用了。
+     * 真正的原因只是目录没建，所以这里把两种常见情况点明。
+     */
+    protected String gitHint(Exception e) {
+        String m = e.getMessage() == null ? "" : e.getMessage();
+        if (m.contains("267") || m.contains("目录名称无效") || m.contains("Invalid directory")
+                || m.contains("The directory name is invalid")) {
+            return "。这次操作的**目录不存在**（不是没装 git）：先用 create_directory 建目录，"
+                + "或者直接用 git_init（它会自动建）";
+        }
+        if (m.contains("Cannot run program \"git\"") || m.contains("CreateProcess error=2,")
+                || m.contains("找不到指定的文件")) {
+            return "。没找到 git 可执行文件：装一个 Git for Windows，或用 GIT_EXE 环境变量指定 git.exe 的路径";
+        }
+        return "";
+    }
+
     /**
      * 安全获取必填字符串参数。
      *
@@ -117,7 +193,7 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
     }
 
     /** 把本工具的必填参数（带说明）列出来，附在报错后面，方便模型下一轮改对。 */
-    private String requiredParamsHint() {
+    protected String requiredParamsHint() {
         try {
             Object defObj = getFunctionDefinition() == null ? null : getFunctionDefinition().get("parameters");
             if (!(defObj instanceof Map<?, ?> def)) {

@@ -50,13 +50,13 @@ public class GitStashTool extends AbstractToolPlugin {
             switch (action) {
                 case "push" -> {
                     pb = message != null ? 
-                        new ProcessBuilder("git", "stash", "push", "-m", message) :
-                        new ProcessBuilder("git", "stash", "push");
+                        new ProcessBuilder(gitExecutable(), "stash", "push", "-m", message) :
+                        new ProcessBuilder(gitExecutable(), "stash", "push");
                 }
-                case "pop" -> pb = new ProcessBuilder("git", "stash", "pop");
-                case "list" -> pb = new ProcessBuilder("git", "stash", "list");
-                case "drop" -> pb = new ProcessBuilder("git", "stash", "drop");
-                case "apply" -> pb = new ProcessBuilder("git", "stash", "apply");
+                case "pop" -> pb = new ProcessBuilder(gitExecutable(), "stash", "pop");
+                case "list" -> pb = new ProcessBuilder(gitExecutable(), "stash", "list");
+                case "drop" -> pb = new ProcessBuilder(gitExecutable(), "stash", "drop");
+                case "apply" -> pb = new ProcessBuilder(gitExecutable(), "stash", "apply");
                 default -> { return error("未知操作: " + action); }
             }
 

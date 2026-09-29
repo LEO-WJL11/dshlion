@@ -873,7 +873,10 @@ public class AgentLoop {
             .findFirst();
 
         if (toolOpt.isEmpty()) {
-            String error = "未找到工具: " + toolName;
+            // 模型偶尔会发明工具名（实测它调用过 delete_directory_placeholder —— 没有这个工具）。
+            // 只回一句"未找到工具"它下一轮还会试别的；带上最接近的现有工具，它基本能一次改对。
+            String suggest = suggestToolNames(toolName, mode);
+            String error = "未找到工具: " + toolName + suggest;
             log.error(error);
             eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
                 Map.of("toolName", toolName, "error", error), error);
@@ -1346,6 +1349,52 @@ public class AgentLoop {
             }
         }
         return out;
+    }
+
+    /**
+     * 工具名写错时，挑几个最接近的现有工具名当提示（实测能省掉一整轮白跑）。
+     *
+     * <p>用户日志里模型调过 {@code delete_directory_placeholder}（并不存在），
+     * 只回"未找到工具"它会换个猜法继续试；带上候选它基本一次就改对。
+     */
+    private String suggestToolNames(String wrong, AgentMode mode) {
+        if (wrong == null || wrong.isBlank()) {
+            return "";
+        }
+        String w = wrong.toLowerCase().replace('_', ' ').trim();
+        String[] parts = w.split("\\s+");
+        java.util.List<String> scored = new java.util.ArrayList<>();
+        for (ToolPlugin t : pluginRegistry.getToolsByMode(mode)) {
+            String name = t.getName() == null ? "" : t.getName().toLowerCase();
+            if (name.isBlank()) {
+                continue;
+            }
+            int score = 0;
+            for (String p : parts) {
+                if (p.length() >= 3 && name.contains(p)) {
+                    score += 2;
+                }
+            }
+            String flat = name.replace('_', ' ');
+            if (flat.contains(w) || w.contains(flat)) {
+                score += 3;
+            }
+            if (score > 0) {
+                scored.add(score + ":" + t.getName());
+            }
+        }
+        if (scored.isEmpty()) {
+            return "。可用工具见系统提示词里的清单（不要自己造工具名）";
+        }
+        scored.sort(java.util.Comparator.comparingInt((String s) -> -Integer.parseInt(s.split(":")[0])));
+        java.util.List<String> top = new java.util.ArrayList<>();
+        for (String s : scored) {
+            top.add(s.split(":", 2)[1]);
+            if (top.size() == 3) {
+                break;
+            }
+        }
+        return "。你是不是想用这些之一：" + String.join("、", top) + "（别自己造工具名）";
     }
 
     /** 参数指纹：用来判断"是不是一模一样的调用"（喂给 ToolCallGuard） */

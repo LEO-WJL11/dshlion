@@ -45,11 +45,6 @@ public class ShellExecuteTool extends AbstractToolPlugin {
         );
     }
 
-    /** 是不是 Windows。 */
-    private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
-    }
-
     /** 有 PowerShell 7（pwsh）就用它：它支持 `&&`，比 5.1 更接近模型习惯。 */
     private static boolean pwshAvailable() {
         try {

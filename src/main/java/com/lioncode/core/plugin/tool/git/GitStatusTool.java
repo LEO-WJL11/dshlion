@@ -42,7 +42,7 @@ public class GitStatusTool extends AbstractToolPlugin {
 
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
-        return runGitCommand(arguments, "git", "status", "--short");
+        return runGitCommand(arguments, gitExecutable(), "status", "--short");
     }
 
     protected ToolResult runGitCommand(Map<String, Object> arguments, String... command) {

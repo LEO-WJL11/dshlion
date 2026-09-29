@@ -5,6 +5,7 @@ import com.lioncode.core.plugin.tool.ToolResult;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -36,10 +37,14 @@ public class GitInitTool extends AbstractToolPlugin {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             boolean bare = Boolean.TRUE.equals(arguments.get("bare"));
+            // 【实测】模型会直接 git_init 到一个还不存在的目录（.git_test），
+            // 结果 ProcessBuilder 报 error=267 目录名称无效，它还以为是"没装 git"。
+            // git init 到新目录本来就是正常用法，这里直接建出来。
+            Files.createDirectories(java.nio.file.Path.of(path));
             
             ProcessBuilder pb = bare ? 
-                new ProcessBuilder("git", "init", "--bare") :
-                new ProcessBuilder("git", "init");
+                new ProcessBuilder(gitExecutable(), "init", "--bare") :
+                new ProcessBuilder(gitExecutable(), "init");
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
             Process process = pb.start();

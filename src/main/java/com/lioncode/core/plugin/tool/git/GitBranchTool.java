@@ -41,10 +41,10 @@ public class GitBranchTool extends AbstractToolPlugin {
 
             ProcessBuilder pb;
             switch (action) {
-                case "list" -> pb = new ProcessBuilder("git", "branch", "-a");
-                case "create" -> pb = new ProcessBuilder("git", "branch", branch);
-                case "checkout" -> pb = new ProcessBuilder("git", "checkout", branch);
-                case "delete" -> pb = new ProcessBuilder("git", "branch", "-d", branch);
+                case "list" -> pb = new ProcessBuilder(gitExecutable(), "branch", "-a");
+                case "create" -> pb = new ProcessBuilder(gitExecutable(), "branch", branch);
+                case "checkout" -> pb = new ProcessBuilder(gitExecutable(), "checkout", branch);
+                case "delete" -> pb = new ProcessBuilder(gitExecutable(), "branch", "-d", branch);
                 default -> { return error("未知操作: " + action); }
             }
 
