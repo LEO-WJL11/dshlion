@@ -210,6 +210,11 @@
         </div>
 
         <div class="input-area">
+            <!-- 本地模型：前台常驻（挑版本、下载、看进度都在这儿，不用翻设置） -->
+            <div id="modelPanel" style="max-width:1100px;margin:0 auto 8px;padding:8px 12px;
+                 background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;
+                 font-size:12.5px;color:#a0a0b8"></div>
+
             <!-- 模型提问面板：ask_user 工具调用时弹出，用户答完自动收起 -->
             <div id="askUserPanel" style="display:none;max-width:800px;margin:0 auto 10px;
                  background:#1a1a2e;border:1px solid #6c5ce7;border-radius:8px;padding:12px 14px">
@@ -292,6 +297,8 @@ var App = {
         this.refreshRuntimeBanner();
         // 模型下载进度：前台进度条靠它每 1.5 秒刷一次
         this.startLocalWatcher();
+        // 前台「模型」面板：先拿到清单，才知道你选的那份下没下
+        this.refreshModelCache();
         // 先恢复应用配置（模型、apiKey、baseUrl等），再恢复会话与历史
         this.restoreConfig(function() {
             self.refreshRuntimeBanner();
@@ -1451,6 +1458,7 @@ var App = {
     /** 只下载这一份（不切换）：可以把几份都先下好，再挑一份用 */
     downloadLlamaModel: function(file) {
         App.startLocalWatcher(true);   // 立刻开始盯，前台进度条马上出来
+        if (App.refreshModelCache) { App.refreshModelCache(); }
         var msg = document.getElementById('llamaMsg');
         if (msg) msg.textContent = '已开始下载 ' + file + '（后台进行，进度看顶部横幅）…';
         fetch('/api/runtime/local/models/download', {
@@ -1983,8 +1991,138 @@ var App = {
     tickLocal: function() {
         fetch('/api/runtime/local').then(function(r) { return r.json(); }).then(function(res) {
             var st = (res && res.data) || {};
+            App._lastLocal = st;
             App.renderDownloadBar(st);
+            App.renderModelPanel();
         }).catch(function() { /* 网络抖一下就等下一拍 */ });
+    },
+
+    /** 模型清单缓存（面板要用；别每 1.5 秒拉一次） */
+    refreshModelCache: function() {
+        return fetch('/api/runtime/local/models').then(function(r) { return r.json(); })
+            .then(function(res) {
+                App.modelsCache = (res && res.success && res.data) ? res.data : [];
+                App.renderModelPanel();
+                return App.modelsCache;
+            }).catch(function() { return App.modelsCache || []; });
+    },
+
+    toggleModelPanel: function() {
+        App._modelPanelOpen = !App._modelPanelOpen;
+        App.renderModelPanel();
+    },
+
+    /**
+     * 前台「模型」面板。收起来是一行状态，有事（没下 / 在下 / 下载失败 / 手动展开）就摊开。
+     */
+    renderModelPanel: function() {
+        var box = document.getElementById('modelPanel');
+        if (!box) return;
+        var st = App._lastLocal || {};
+        var models = App.modelsCache || [];
+        if (!models.length) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+
+        var phase = st.phase || '';
+        var downloading = phase === 'downloading';
+        var dfile = st.downloadingFile || '';
+        var cur = st.modelFile || '';
+        var curRow = null;
+        for (var i = 0; i < models.length; i++) {
+            if (models[i].file === cur) { curRow = models[i]; }
+        }
+        var curLabel = curRow ? curRow.label : cur;
+
+        // 你选的那份还没下载：这是最该让用户看见的情况
+        var missing = curRow && !curRow.downloaded;
+        var open = App._modelPanelOpen === true || downloading || phase === 'failed' || missing;
+
+        var html = '';
+        // ---- 收起时的那一行 ----
+        var dot, line;
+        if (downloading) {
+            dot = '<span style="color:#fdcb6e">●</span>';
+            line = '正在下载 <b style="color:#e8e8f0">' + App.escapeHtml(dfile || cur) + '</b>';
+        } else if (phase === 'failed') {
+            dot = '<span style="color:#e17055">●</span>';
+            line = '下载失败：' + App.escapeHtml(st.lastError || '看日志');
+        } else if (missing) {
+            dot = '<span style="color:#e17055">●</span>';
+            line = '你选的 <b style="color:#e8e8f0">' + App.escapeHtml(curLabel)
+                 + '</b> 还没下载（' + (curRow.sizeText || (curRow.sizeGb + ' GB')) + '）'
+                 + (st.running ? '，现在临时在用别的' : '');
+        } else {
+            dot = st.running ? '<span style="color:#00b894">●</span>' : '<span style="color:#6a6a80">○</span>';
+            line = '本地模型：<b style="color:#e8e8f0">' + App.escapeHtml(curLabel) + '</b>'
+                 + ' <span style="color:#6a6a80">'
+                 + (st.running ? '正在用' : '已就绪（发消息时加载）') + '</span>';
+        }
+        html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+             +  '<span>' + dot + '</span><span style="flex:1;min-width:180px">' + line + '</span>'
+             +  '<button class="btn btn-sm" onclick="App.toggleModelPanel()">'
+             +  (open ? '收起 ▴' : '版本 / 下载 ▾') + '</button>'
+             +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 文件夹</button>'
+             +  '<button class="btn btn-sm" onclick="App.showSettings()">⚙️ 详细设置</button>'
+             +  '</div>';
+
+        // ---- 摊开时：下载总进度条 ----
+        if (open && downloading) {
+            var bytes = st.downloadBytes || 0, total = st.downloadTotal || 0;
+            var pct = total > 0 ? Math.floor(bytes * 100 / total) : 0;
+            var speedTxt = App._dlSpeedTxt || '';
+            html += '<div style="display:flex;align-items:center;gap:10px;margin-top:8px">'
+                 +  '<div style="flex:1;height:10px;background:#12121f;border:1px solid #2d2d4a;'
+                 +  'border-radius:5px;overflow:hidden;min-width:120px">'
+                 +  '<div id="mpFill" style="height:100%;width:' + pct + '%;'
+                 +  'background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div></div>'
+                 +  '<span style="color:#fdcb6e;font-variant-numeric:tabular-nums;width:42px;'
+                 +  'text-align:right">' + pct + '%</span>'
+                 +  '<span style="color:#a0a0b8;white-space:nowrap">' + App.mbText(bytes)
+                 +  (total > 0 ? ' / ' + App.mbText(total) : '')
+                 +  (speedTxt ? ' · ' + speedTxt : '') + '</span>'
+                 +  '</div>';
+        }
+
+        // ---- 摊开时：每个版本一行 ----
+        if (open) {
+            html += '<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">';
+            for (var k = 0; k < models.length; k++) {
+                var m = models[k];
+                var tag = '';
+                if (m.current) { tag = ' <span style="color:#6c5ce7">· 正在用</span>'; }
+                else if (m.configured) { tag = ' <span style="color:#6c5ce7">· 已选中</span>'; }
+                if (m.downloading) { tag += ' <span style="color:#fdcb6e">· 正在下载</span>'; }
+                else if (!m.downloaded) { tag += ' <span style="color:#6a6a80">· 未下载</span>'; }
+                html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
+                     +  'padding:5px 8px;background:#12121f;border:1px solid #23233a;border-radius:6px">'
+                     +  '<span style="flex:1;min-width:200px;color:#e8e8f0">'
+                     +  App.escapeHtml(m.label) + tag
+                     +  ' <span style="color:#6a6a80;font-size:11px">'
+                     +  (m.sizeText || (m.sizeGb + ' GB')) + (m.custom ? ' · 你放进去的' : '')
+                     +  '</span></span>';
+                if (m.downloading) {
+                    html += '<span style="color:#fdcb6e;font-size:11.5px">下载中…</span>';
+                } else {
+                    if (!m.downloaded) {
+                        html += '<button class="btn btn-sm" onclick="App.downloadLlamaModel(\''
+                             +  App.escapeAttr(m.file) + '\')">下载</button>';
+                    }
+                    if (!m.current) {
+                        html += '<button class="btn btn-sm" onclick="App.switchLlamaModel(\''
+                             +  App.escapeAttr(m.file) + '\')">'
+                             +  (m.configured ? '重启生效' : '使用') + '</button>';
+                    }
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+            html += '<div style="margin-top:7px;font-size:11px;color:#6a6a80">'
+                 +  '模型目录：<span style="font-family:monospace">'
+                 +  App.escapeHtml(st.modelDir || '') + '</span>'
+                 +  ' —— 自己的 .gguf 丢进去，点「📂 文件夹」就能打开；'
+                 +  '想让下好的那份生效，点「使用」，再发一条消息即可。</div>';
+        }
+        box.innerHTML = html;
     },
 
     /** 把状态渲染成前台进度条；不在下载就收起来 */
@@ -2014,6 +2152,7 @@ var App = {
                 }
             }
             App._dlPrev = {bytes: bytes, at: now};
+            App._dlSpeedTxt = speedTxt;      // 前台面板也用这一份速度/剩余时间
 
             bar.style.display = 'block';
             bar.style.background = '#1a1a2e';
@@ -2051,8 +2190,9 @@ var App = {
                 var b = document.getElementById('dlBar');
                 if (b) b.style.display = 'none';
             }, failed ? 15000 : 8000);
-            // 清单/设置页跟着刷新（下载完成状态要变）
+            // 清单/设置页/前台面板跟着刷新（下载完成状态要变）
             if (App.fillModelsFromConfig) { App.fillModelsFromConfig(); }
+            App.refreshModelCache();
             var settingsOpen = document.getElementById('settingsContent');
             if (settingsOpen && settingsOpen.innerHTML.indexOf('模型版本') >= 0) {
                 App.renderLlamaTab();

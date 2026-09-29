@@ -56,7 +56,9 @@
 ;         自动按标准模式跑）
 ; 1.2.6：模型下载**放到前台，带进度条**（文件名 / 百分比 / 已下总量 / 速度 / 剩余时间），
 ;         下完或失败都在条上说明；设置页里正在下的那一行也有小进度条
-#define AppVersion     "1.2.6"
+; 1.2.7：**前台常驻「模型」面板**（输入框上方）—— 挑版本、点下载、看进度都在前台，
+;         不用翻设置；你选的那份还没下载时它会自己摊开
+#define AppVersion     "1.2.7"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
@@ -73,7 +75,16 @@ PrivilegesRequired=lowest
 OutputDir=release
 OutputBaseFilename=LionBox-Setup-{#AppVersion}
 Compression=lzma2/ultra64
-SolidCompression=yes
+; 压缩用满 16 线程（这台是 16 核 16 线程）。LZMA2 支持多线程压缩：
+; 多线程压缩：LZMA2 用满 16 线程（本机 16 核 16 线程）。
+; 【实测】solid 压缩是**单流**的，开了 SolidCompression=yes 时这个设置等于没用：
+;   ultra64 + solid + 16 线程        31.0 秒   72.19 MB
+;   ultra64 + 不 solid + 16 线程     23.6 秒   73.96 MB   ← 现在用这套
+;   lzma2/max + 不 solid + 16 线程   22.2 秒   74.07 MB
+; 代价是数据切成多块（块大小 = 总量 / 线程数），包大 1.8 MB；换 7.4 秒压缩时间，
+; 对"改一点就出一次包"是值的。要极致小体积就把 SolidCompression 改回 yes。
+LZMANumBlockThreads=16
+SolidCompression=no
 ; 打包成**单个自包含 exe**：不分卷。
 ; 以前带 8.9GB 权重时必须分卷（单文件超 4GB 下载/文件系统都别扭），
 ; 现在权重改为首次使用时下载，包体只有 ~70MB，分卷反而害人 ——

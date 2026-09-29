@@ -940,6 +940,19 @@ public class LocalModelRuntime {
     private final java.util.concurrent.atomic.AtomicReference<String> modelInUse =
         new java.util.concurrent.atomic.AtomicReference<>("");
 
+    /** 上次为哪一对（配置的 / 实际用的）打过兜底警告，避免状态轮询把日志刷爆 */
+    private final java.util.concurrent.atomic.AtomicReference<String> lastFallbackWarn =
+        new java.util.concurrent.atomic.AtomicReference<>("");
+
+    /** 兜底警告只打一次（同一对不再重复） */
+    private void warnFallbackOnce(String configured, String inUse) {
+        String key = configured + " -> " + inUse;
+        if (!key.equals(lastFallbackWarn.getAndSet(key))) {
+            log.warn("配置的模型 {} 不可用，暂时改用现成的 {}（可在设置里下载配置的那个）",
+                configured, inUse);
+        }
+    }
+
     /** 这次启动用的是不是兜底的模型（配置的那个没找到） */
     private final java.util.concurrent.atomic.AtomicBoolean modelIsFallback =
         new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -982,8 +995,9 @@ public class LocalModelRuntime {
                 // 直接用目录里现成的 .gguf，并把换了哪个文件写进日志。
                 Path any = pickAnyGguf(base);
                 if (any != null) {
-                    log.warn("配置的模型 {} 不可用，暂时改用现成的 {}（可在设置里下载配置的那个）",
-                        effectiveModelFile(), any.getFileName());
+                    // 这条警告以前每次 status() 都打（界面每 1.5 秒轮询一次状态 →
+                    // 日志刷刷刷）。改成同一对（配置的 / 实际用的）只打一次，换人了再打。
+                    warnFallbackOnce(effectiveModelFile(), any.getFileName().toString());
                     return any;
                 }
             }
