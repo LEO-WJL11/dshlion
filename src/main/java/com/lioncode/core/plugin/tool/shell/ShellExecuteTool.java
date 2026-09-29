@@ -45,21 +45,44 @@ public class ShellExecuteTool extends AbstractToolPlugin {
         );
     }
 
-    @Override
-    public ToolResult execute(Map<String, Object> arguments) {
+    /** 是不是 Windows。 */
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    /** 有 PowerShell 7（pwsh）就用它：它支持 `&&`，比 5.1 更接近模型习惯。 */
+    private static boolean pwshAvailable() {
         try {
+            Process p = new ProcessBuilder("pwsh", "-NoProfile", "-Command", "exit 0")
+                .redirectErrorStream(true).start();
+            return p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Override
+    public ToolResult execute(Map<String, Object> arguments) {        try {
             String command = getRequiredStringArg(arguments, "command");
             String workdir = getStringArg(arguments, "workdir", null);
             int timeout = arguments.containsKey("timeout") ? 
-                ((Number) arguments.get("timeout")).intValue() : 60;
+                ((Number) arguments.get("timeout")).intValue() : 300;
 
             log.info("执行命令: {}", command);
 
             ProcessBuilder pb = new ProcessBuilder();
-            
-            // 根据操作系统设置shell
-            if (System.getProperty("os.name").toLowerCase().contains("windows")) {
-                pb.command("cmd", "/c", command);
+
+            // 根据操作系统设置 shell。
+            //
+            // Windows 上原来用 `cmd /c`，模型写的是 Unix 风格命令（ls / cat / rm / pwd），
+            // cmd 里根本没有这些 → 实测报 `'ls' 不是内部或外部命令`（退出码 1），
+            // 后面还跟着 `系统找不到指定的文件`（退出码 2）。
+            // 改成 PowerShell：ls/cat/rm/cp/mv/pwd 都是内置别名，能直接跑通。
+            // 另外 PS 5.1 不认 `&&` 串联，这里顺手换成 `;`（模型很爱写 `ls && pwd`）。
+            if (isWindows()) {
+                String shell = pwshAvailable() ? "pwsh" : "powershell";
+                String script = command.replace("&&", ";");
+                pb.command(shell, "-NoProfile", "-NonInteractive", "-Command", script);
             } else {
                 pb.command("sh", "-c", command);
             }

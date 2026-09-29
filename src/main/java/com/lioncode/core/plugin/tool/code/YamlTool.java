@@ -33,7 +33,9 @@ public class YamlTool extends AbstractToolPlugin {
 
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
-        String input = getRequiredStringArg(arguments, "arguments");
+        // 【曾经是个真 bug】schema 里声明的是 input，这里却读 arguments ——
+        // 用户日志里 yaml_process 每次都报"缺少必需参数: arguments"，永远不可能成功。
+        String input = getRequiredStringArg(arguments, "input");
         // 简化实现
         return success("YAML处理完成（简化实现）:\n" + input);
     }

@@ -35,9 +35,9 @@ lion:
   # Agent主循环配置
   agent:
     # 工具调用超时（秒）
-    tool-timeout-seconds: 120
+    tool-timeout-seconds: 600      # 目前代码里没有读它的地方（保留字段）；真要限时请改具体工具
     # 模型调用超时（秒）
-    model-timeout-seconds: 300
+    model-timeout-seconds: 1800    # 同上：模型调用的实际超时在适配器 HTTP 客户端（readTimeout 900s）
 
   # 事件溯源配置
   event:

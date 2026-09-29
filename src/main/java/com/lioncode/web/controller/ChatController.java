@@ -72,11 +72,12 @@ public class ChatController {
             var future = dispatcher.submit(request.sessionId(), request.message(),
                 model, level, steer);
 
-            // 等待结果（模型调用自身有超时，此处给足冗余）
-            String response = future.get(10, TimeUnit.MINUTES);
+            // 【不设超时】原来这里是 future.get(10, TimeUnit.MINUTES)：本地模型 11 token/s，
+            // 工具多的任务一超过 10 分钟就被砍成"处理超时"，前面干的活全白费
+            // （用户实测跑到第 70 个工具时就是这么断的）。改成一直等，该跑多久跑多久；
+            // 想中断用界面上的停止按钮（走 AgentControlManager）。
+            String response = future.get();
             return ApiResponse.ok(response);
-        } catch (java.util.concurrent.TimeoutException e) {
-            return ApiResponse.error("处理超时");
         } catch (Exception e) {
             return ApiResponse.error("处理消息失败: " + e.getMessage());
         }

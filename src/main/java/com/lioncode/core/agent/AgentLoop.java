@@ -89,7 +89,9 @@ public class AgentLoop {
     private static final int MAX_CALL_REPAIR = 2;
 
     /** 一条用户消息最多允许多少轮工具调用（跑飞时明确报错，别拖到前端超时） */
-    private static final int MAX_TOOL_ROUNDS = 60;
+    // 轮次上限：只是防跑飞的兜底。一轮最多 3 个调用，200 轮 = 600 个调用，够长任务用；
+    // 真正的死循环由 ToolCallGuard（同参数重复 5 次即终止）负责，不该靠砍任务来"防"。
+    private static final int MAX_TOOL_ROUNDS = 200;
 
     /**
      * 一轮里最多执行几个工具调用。
@@ -1062,7 +1064,14 @@ public class AgentLoop {
         // 当前工作区：所有文件操作和命令执行都在此工作区内进行
         prompt.append("## 工作区\n");
         prompt.append(workspacePath != null ? workspacePath : "(未设置)").append("\n");
-        prompt.append("文件与命令都在此工作区内；path 可用相对路径（相对工作区）或绝对路径。\n\n");
+        prompt.append("文件与命令都在此工作区内；path 可用相对路径（相对工作区）或绝对路径。\n");
+        // 执行环境：实测模型爱写 Unix 命令，在 Windows 的 cmd 里 ls/cat/rm 都报"'ls' 不是内部或外部命令"。
+        // 现在 execute_command 走 PowerShell（ls/cat/rm/cp/mv/pwd 都是内置别名），这里把环境说清楚。
+        if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+            prompt.append("执行环境是 **Windows**，execute_command 走 PowerShell：ls/cat/rm/cp/mv/pwd 都能用，");
+            prompt.append("但多条命令之间用 `;` 分隔，不要用 `&&`（Windows PowerShell 不认）。\n");
+        }
+        prompt.append("\n");
 
         // 根据模式添加专属提示词（每个模式独立撰写，行为规则各不相同）
         prompt.append(modeInstructions(mode));

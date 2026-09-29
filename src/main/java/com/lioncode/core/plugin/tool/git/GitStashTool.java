@@ -27,7 +27,7 @@ public class GitStashTool extends AbstractToolPlugin {
     protected Map<String, Object> getParametersSchema() {
         return Map.of("type", "object", "properties", Map.of(
             "path", Map.of("type", "string", "description", "仓库路径"),
-            "action", Map.of("type", "string", "description", "push/pop/list/drop/apply"),
+            "action", Map.of("type", "string", "description", "push/pop/list/drop/apply（save 等于 push）"),
             "message", Map.of("type", "string", "description", "stash消息")
         ), "required", new String[]{"path", "action"});
     }
@@ -36,7 +36,14 @@ public class GitStashTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            String action = getRequiredStringArg(arguments, "action");
+            String action = getRequiredStringArg(arguments, "action").toLowerCase().trim();
+            // 别名：模型写 save / stash / create 的时候，意思都是 push（存起来）
+            action = switch (action) {
+                case "save", "stash", "create", "store", "push_stash" -> "push";
+                case "restore", "unstash", "pop_stash" -> "pop";
+                case "ls", "show", "status" -> "list";
+                default -> action;
+            };
             String message = getStringArg(arguments, "message", null);
 
             ProcessBuilder pb;
