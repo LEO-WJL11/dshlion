@@ -38,18 +38,24 @@ public class FileGlobTool extends AbstractToolPlugin {
         return Map.of(
             "type", "object",
             "properties", Map.of(
-                "path", Map.of("type", "string", "description", "搜索根目录"),
+                "path", Map.of("type", "string", "description", "搜索根目录（可选，默认当前工作区）"),
                 "pattern", Map.of("type", "string", "description", "glob模式，如 **/*.java"),
                 "maxResults", Map.of("type", "integer", "description", "最大结果数", "default", 100)
             ),
-            "required", new String[]{"path", "pattern"}
+            "required", new String[]{"pattern"}
         );
     }
 
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
         try {
-            String path = resolvePath(getRequiredStringArg(arguments, "path"));
+            // path 可选：实测模型想"列出所有文件"时只给 pattern（glob_files(pattern="*")），
+            // 以前直接报"缺少必需参数: path"，白跑一轮。默认就用当前工作区。
+            String rawPath = getStringArg(arguments, "path", null);
+            if (rawPath == null || rawPath.isBlank()) {
+                rawPath = currentWorkspace() != null ? currentWorkspace() : ".";
+            }
+            String path = resolvePath(rawPath);
             String pattern = getRequiredStringArg(arguments, "pattern");
             int maxResults = arguments.containsKey("maxResults") ? 
                 ((Number) arguments.get("maxResults")).intValue() : 100;

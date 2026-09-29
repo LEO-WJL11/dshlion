@@ -36,7 +36,7 @@ public class FileModifyTool extends AbstractToolPlugin {
             "type", "object",
             "properties", Map.of(
                 "path", Map.of("type", "string", "description", "文件路径"),
-                "operation", Map.of("type", "string", "description", "操作类型: replace/insert/delete"),
+                "operation", Map.of("type", "string", "description", "操作类型: replace / insert / delete / append（追加到末尾）"),
                 "startLine", Map.of("type", "integer", "description", "起始行号"),
                 "endLine", Map.of("type", "integer", "description", "结束行号（replace操作）"),
                 "content", Map.of("type", "string", "description", "新内容")
@@ -96,8 +96,23 @@ public class FileModifyTool extends AbstractToolPlugin {
                         lines.remove(i - 1);
                     }
                 }
+                case "append" -> {
+                    // 实测模型会写 operation=append（追加内容），以前只回"未知操作类型: append"，
+                    // 白跑一轮。追加到文件末尾本来就是 modify_file 该会的事。
+                    String appendContent = getStringArg(arguments, "content", null);
+                    if (appendContent == null) {
+                        return error("append 操作需要 content 参数（要追加的内容）");
+                    }
+                    if (!lines.isEmpty()) {
+                        lines.add("");
+                    }
+                    for (String line : appendContent.split("\\r?\\n", -1)) {
+                        lines.add(line);
+                    }
+                }
                 default -> {
-                    return error("未知操作类型: " + operation);
+                    return error("未知操作类型: " + operation
+                        + "。支持 replace / insert / delete / append（想直接追加也可以用 append_file）");
                 }
             }
 

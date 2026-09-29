@@ -50,6 +50,16 @@ public class FileDeleteTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             Path target = Path.of(path);
 
+            // 【安全护栏】不许删工作区根目录（或它的上级）。
+            // 实测：模型跑"把工具都用一遍，最后清理"时直接
+            // delete_file(path=<工作区根>, recursive=true) —— 那是要删掉用户整个工作区，
+            // 而且删到一半失败，留下一堆半删状态的文件。这种请求直接拒绝。
+            if (isWorkspaceRootOrAbove(target)) {
+                return error("拒绝删除当前工作区根目录: " + path
+                    + "。删这里的文件请指定具体子路径（例如 " + path + "\\\\某个文件.txt），"
+                    + "整体清理请用 execute_command 里明确写出要删的目录。");
+            }
+
             if (!Files.exists(target)) {
                 return error("路径不存在: " + path);
             }
@@ -77,6 +87,11 @@ public class FileDeleteTool extends AbstractToolPlugin {
                         });
                     }
                     if (Files.exists(target)) {
+                        // Java 逐文件删在 Windows 上偶尔还是删不干净（只读/长路径/占用），
+                        // 退回系统的 rmdir /s /q —— 它对只读和长路径都比 Files.delete 宽。
+                        if (isWindows() && removeWithCmd(target)) {
+                            return success("已递归删除目录（走系统 rmdir）: " + path);
+                        }
                         return error("删除失败（部分内容删不掉，可能被占用或权限不足）: " + path
                             + "。可以改用 execute_command 跑 Remove-Item -Recurse -Force。");
                     }
@@ -101,6 +116,33 @@ public class FileDeleteTool extends AbstractToolPlugin {
             return error("删除失败: " + e.getMessage());
         } catch (Exception e) {
             return error("参数错误: " + e.getMessage());
+        }
+    }
+
+    /** 这个路径是不是当前工作区根目录（或它的上级）。 */
+    private boolean isWorkspaceRootOrAbove(java.nio.file.Path target) {
+        String ws = currentWorkspace();
+        if (ws == null || ws.isBlank()) {
+            return false;
+        }
+        try {
+            java.nio.file.Path root = java.nio.file.Path.of(ws).toAbsolutePath().normalize();
+            java.nio.file.Path t = target.toAbsolutePath().normalize();
+            return t.equals(root) || root.startsWith(t);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Windows 上退回系统的 rmdir /s /q（下面这种删法对只读/长路径更宽）。 */
+    private boolean removeWithCmd(java.nio.file.Path target) {
+        try {
+            Process p = new ProcessBuilder("cmd", "/c", "rmdir", "/s", "/q", target.toString())
+                .redirectErrorStream(true).start();
+            boolean done = p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS);
+            return done && p.exitValue() == 0 && !java.nio.file.Files.exists(target);
+        } catch (Exception e) {
+            return false;
         }
     }
 }

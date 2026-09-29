@@ -36,7 +36,9 @@
 ;          stop_background 列出可用 pid、ask_user 超时下限 30 秒、补上 git_reset
 ; 1.1.13：GBK 文件读取容错（Input length = 1）、含只读文件的目录递归删除、
 ;          cmd/PowerShell 命令分流 + 输出 UTF-8、move/copy 参数别名、git_commit 兜底身份
-#define AppVersion     "1.1.13"
+; 1.1.14：glob_files 的 path 可选、modify_file 支持 append、
+;          delete_file 拒绝删除工作区根目录（安全护栏）+ 递归删失败退回系统 rmdir
+#define AppVersion     "1.1.14"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
