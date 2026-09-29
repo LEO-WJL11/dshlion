@@ -936,7 +936,12 @@ public class AgentLoop {
             // 【派发前先把参数类型转对】文本通道（本地盒子默认）下所有参数都是字符串，
             // 而工具里写的是 ((Number) args.get("lines")).intValue() → ClassCastException，
             // 实测 glob_files / head_tail_file / directory_tree / modify_file 全中招。
-            ToolResult result = tool.execute(coerceArguments(tool, toolCall.arguments()));
+            //
+            // 并且**必须带超时**：工具自己卡住时（等网络/凭据/输入）不能再拖住整条任务。
+            // 实测：git_remote show 去连远端、git 在等凭据，readAllBytes 一直阻塞，
+            // 那条消息卡了 3 分多钟直到用户手动停止。
+            ToolResult result = runToolWithTimeout(tool, coerceArguments(tool, toolCall.arguments()),
+                toolName, sessionId);
             
             if (result.success()) {
                 eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_COMPLETE,
@@ -1215,6 +1220,62 @@ public class AgentLoop {
         } catch (Exception e) {
             log.debug("取工具参数签名失败: {}", tool.getName(), e);
             return "";
+        }
+    }
+
+    /**
+     * 单个工具的执行上限（秒）。
+     *
+     * <p>实测教训：`git_remote show origin` 会去连远端，git 在等凭据时**永远不关 stdout**，
+     * 而工具里是 `readAllBytes()` 写在 `waitFor(30s)` **前面** —— 于是那个 30 秒超时
+     * 形同虚设，整条消息卡了 3 分多钟，用户只能手动点停止。
+     * 这里在**派发层**兜一道：任何工具超过这个时间没返回，就当它卡住，回一句可照做的错误，
+     * 让模型换别的做法 —— 一条消息绝不会因为某个工具卡死而废掉。
+     */
+    @org.springframework.beans.factory.annotation.Value("${lionbox.agent.tool-timeout-seconds:600}")
+    private int toolTimeoutSeconds;
+
+    /**
+     * 带超时执行工具。执行放到单独线程，并**在该线程里重新设置上下文**
+     * （WorkspaceContext/SessionContext 是 ThreadLocal，不设的话相对路径解析会失效）。
+     */
+    private ToolResult runToolWithTimeout(ToolPlugin tool, Map<String, Object> args,
+                                          String toolName, String sessionId) {
+        String wsPath = sessionManager.getSession(sessionId)
+            .flatMap(s -> workspaceManager.getWorkspace(s.workspaceId()))
+            .map(ws -> ws.path())
+            .orElse(null);
+        java.util.concurrent.ExecutorService ex =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "tool-" + toolName);
+                t.setDaemon(true);
+                return t;
+            });
+        try {
+            var future = ex.submit(() -> {
+                if (wsPath != null) {
+                    com.lioncode.core.workspace.WorkspaceContext.set(wsPath);
+                }
+                com.lioncode.core.session.SessionContext.set(sessionId);
+                try {
+                    return tool.execute(args);
+                } finally {
+                    com.lioncode.core.workspace.WorkspaceContext.clear();
+                    com.lioncode.core.session.SessionContext.clear();
+                }
+            });
+            return future.get(toolTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.error("工具 {} 超过 {} 秒没返回，判定卡住并放弃等待 - 会话: {}",
+                toolName, toolTimeoutSeconds, sessionId);
+            return ToolResult.error("工具执行超时（超过 " + toolTimeoutSeconds + " 秒还没返回）: " + toolName
+                + "。多半是在等网络、凭据或用户输入。请换个参数重试，或用别的等价工具完成这件事。");
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            log.warn("工具 {} 执行异常: {}", toolName, cause.toString());
+            return ToolResult.error("工具执行异常: " + cause.getMessage());
+        } finally {
+            ex.shutdownNow();
         }
     }
 

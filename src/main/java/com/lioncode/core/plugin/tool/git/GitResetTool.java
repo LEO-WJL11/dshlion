@@ -69,13 +69,13 @@ public class GitResetTool extends AbstractToolPlugin {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
+            gitEnv(pb);
             Process process = pb.start();
-            String output = new String(process.getInputStream().readAllBytes());
-            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
-            if (!finished) {
+            if (!process.waitFor(60, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return error("git reset 超时");
+                return error("git 命令超时（60 秒没返回）：多半在等网络或凭据");
             }
+            String output = new String(process.getInputStream().readAllBytes());
             int code = process.exitValue();
             String head = "git reset --" + mode + (("HEAD".equals(ref)) ? "" : " " + ref)
                 + "（退出码 " + code + "）";

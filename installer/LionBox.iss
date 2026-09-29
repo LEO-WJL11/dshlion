@@ -39,7 +39,9 @@
 ; 1.1.14：glob_files 的 path 可选、modify_file 支持 append、
 ;          delete_file 拒绝删除工作区根目录（安全护栏）+ 递归删失败退回系统 rmdir
 ; 1.1.15：git_remote 支持 add/remove、问答接口暴露 timeoutSeconds（30 秒下限可验证）
-#define AppVersion     "1.1.15"
+; 1.1.16：修"工具卡住拖死整条消息" —— git 不再等凭据/联网（remote show 用 -n、
+;          GIT_TERMINAL_PROMPT=0）、先 waitFor 再读输出、派发层加工具超时兜底
+#define AppVersion     "1.1.16"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

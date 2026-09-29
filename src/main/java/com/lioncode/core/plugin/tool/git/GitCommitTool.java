@@ -63,15 +63,15 @@ public class GitCommitTool extends AbstractToolPlugin {
             "commit", "-m", message);
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
+            gitEnv(pb);
 
             Process process = pb.start();
-            String output = new String(process.getInputStream().readAllBytes());
-            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
-
-            if (!finished) {
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return error("Git提交超时");
+                return error("git 命令超时（30 秒没返回）：多半在等网络或凭据");
             }
+            String output = new String(process.getInputStream().readAllBytes());
+
 
             int exitCode = process.exitValue();
             if (exitCode == 0) {

@@ -52,15 +52,15 @@ public class GitStatusTool extends AbstractToolPlugin {
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
+            gitEnv(pb);
 
             Process process = pb.start();
-            String output = new String(process.getInputStream().readAllBytes());
-            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
-
-            if (!finished) {
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return error("Git命令执行超时");
+                return error("git 命令超时（30 秒没返回）：多半在等网络或凭据");
             }
+            String output = new String(process.getInputStream().readAllBytes());
+
 
             return success(output.isEmpty() ? "（无变更）" : output);
 

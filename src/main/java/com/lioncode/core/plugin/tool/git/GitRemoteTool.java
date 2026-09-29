@@ -46,7 +46,8 @@ public class GitRemoteTool extends AbstractToolPlugin {
                 case "list", "ls" -> pb = new ProcessBuilder(gitExecutable(), "remote", "-v");
                 case "show" -> {
                     String name = getStringArg(arguments, "name", "origin");
-                    pb = new ProcessBuilder(gitExecutable(), "remote", "show",
+                    // -n：只读本地配置，不联网。实测不加 -n 时 git 会去连远端、等凭据卡死。
+                    pb = new ProcessBuilder(gitExecutable(), "remote", "show", "-n",
                         name == null || name.isBlank() ? "origin" : name);
                 }
                 // 实测模型想 add（"仅支持list/show操作"直接卡住它）。加远程是很常用的操作，
@@ -74,9 +75,16 @@ public class GitRemoteTool extends AbstractToolPlugin {
 
             pb.directory(new File(path));
             pb.redirectErrorStream(true);
+            gitEnv(pb);
             Process process = pb.start();
+            // 【顺序要紧】先等进程结束再读：readAllBytes() 会一直阻塞到 stdout 关闭，
+            // 而 git 在等凭据/网络时不会关（实测卡了 3 分钟），先读就等于没有超时。
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return error("git 命令超时（30 秒没返回）：多半在等网络或凭据。"
+                    + "远程操作用 -n 只看本地配置，或先确认网络/凭据。");
+            }
             String output = new String(process.getInputStream().readAllBytes());
-            process.waitFor(30, TimeUnit.SECONDS);
             return success(output.isEmpty() ? "（无远程仓库）" : output);
         } catch (Exception e) {
             return error("Git remote操作失败: " + e.getMessage());

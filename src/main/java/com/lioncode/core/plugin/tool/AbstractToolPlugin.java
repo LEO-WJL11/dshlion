@@ -133,6 +133,21 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
     }
 
     /**
+     * 给 git 的进程加上"绝不等凭据"的环境。
+     *
+     * <p>实测教训：`git remote show origin` 会去连远端；远端要凭据时 git 会**交互式等输入**，
+     * 而工具里是先 readAllBytes() 再 waitFor()，于是永远阻塞 —— 那条消息卡了 3 分多钟。
+     * 设了这几个变量，git 遇到需要凭据就直接失败返回，不会吊住。
+     */
+    protected static void gitEnv(ProcessBuilder pb) {
+        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+        pb.environment().put("GIT_ASKPASS", "echo");
+        pb.environment().put("SSH_ASKPASS", "echo");
+        pb.environment().put("GCM_INTERACTIVE", "never");
+        pb.environment().put("GIT_OPTIONAL_LOCKS", "0");
+    }
+
+    /**
      * 跑 git 命令前的目录检查：目录不存在时给出能照着做的错误。
      *
      * <p>原来直接把不存在的目录塞给 ProcessBuilder，用户看到的是
