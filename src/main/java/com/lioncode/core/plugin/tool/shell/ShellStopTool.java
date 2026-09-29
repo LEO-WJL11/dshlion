@@ -33,7 +33,15 @@ public class ShellStopTool extends AbstractToolPlugin {
         try {
             String pid = getRequiredStringArg(arguments, "pid");
             Process process = ShellBackgroundTool.backgroundProcesses.remove(pid);
-            if (process == null) return error("未找到进程: " + pid);
+            if (process == null) {
+                // 实测模型会拿一个自己编的 pid 来停（a7472d31）。
+                // 把当前真在跑的后台进程 id 列出来，它下一轮就能用对。
+                var running = ShellBackgroundTool.backgroundProcesses.keySet();
+                return error("未找到进程: " + pid
+                    + (running.isEmpty()
+                        ? "（当前没有在跑的后台进程；先用 run_background 启动，它会返回 pid）"
+                        : "（当前在跑的后台进程: " + String.join(", ", running) + "）"));
+            }
             process.destroyForcibly();
             return success("进程已停止: " + pid);
         } catch (Exception e) {

@@ -35,6 +35,14 @@ public class FileWcTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
+            // 实测：模型把目录当文件传进来，原来只回"统计失败: <路径>"（异常 message 是空的），
+            // 等于什么都没说，它下一轮才知道换文件。这里直接把原因写清楚。
+            if (Files.isDirectory(Path.of(path))) {
+                return error("这是目录，不是文件: " + path + "（先 list_directory/glob_files 找到具体文件）");
+            }
+            if (!Files.exists(Path.of(path))) {
+                return error("文件不存在: " + path);
+            }
             String content = Files.readString(Path.of(path));
             long lines = content.chars().filter(c -> c == '\n').count() + 1;
             long words = content.split("\\s+").length;

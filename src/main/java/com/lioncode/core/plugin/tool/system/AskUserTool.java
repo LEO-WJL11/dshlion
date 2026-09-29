@@ -37,6 +37,9 @@ public class AskUserTool extends AbstractToolPlugin {
     /** 最多等多久（秒） */
     private static final int MAX_TIMEOUT = 300;
 
+    /** 最短等待时间（秒）：提问是给人答的，5 秒那种等于没问。 */
+    private static final int MIN_TIMEOUT = 30;
+
     private final UserQuestionService questionService;
     private final SoundNotifier soundNotifier;
 
@@ -78,7 +81,7 @@ public class AskUserTool extends AbstractToolPlugin {
                     "items", Map.of("type", "string")),
                 "timeoutSeconds", Map.of(
                     "type", "integer",
-                    "description", "最多等多少秒（可选，默认 300）")
+                    "description", "最多等多少秒（可选，默认 300，最少 30 —— 人答题需要时间，别填几秒）")
             ),
             "required", new String[]{"question"});
     }
@@ -148,6 +151,9 @@ public class AskUserTool extends AbstractToolPlugin {
         if (t <= 0) {
             t = UserQuestionService.DEFAULT_TIMEOUT_SECONDS;
         }
+        // 下限 30 秒：实测模型传 timeoutSeconds=5，人根本来不及答，
+        // 它自己连着试了 8 次全部超时。提问是给人答的，不是给机器答的。
+        t = Math.max(t, MIN_TIMEOUT);
         return Math.min(t, MAX_TIMEOUT);
     }
 }

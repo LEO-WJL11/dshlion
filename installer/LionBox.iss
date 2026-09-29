@@ -32,7 +32,9 @@
 ;          execute_command/数值参数等失败
 ; 1.1.11：escape_string/timestamp/git_* 工具修复（正文塞进 target、strftime 被拆坏、
 ;          目录不存在被误报成没装 git）+ delete_file 支持 recursive + 工具名写错给候选
-#define AppVersion     "1.1.11"
+; 1.1.12：number_convert 认进制名（dec/hex/bin/oct）、word_count 传目录给明确错误、
+;          stop_background 列出可用 pid、ask_user 超时下限 30 秒、补上 git_reset
+#define AppVersion     "1.1.12"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
