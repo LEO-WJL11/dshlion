@@ -312,7 +312,7 @@ public class RuntimeController {
     /**
      * 只下载指定的那一份量化（不切换当前模型）。
      *
-     * <p>用户可以先把几份都下好再挑一份用；下载走后台线程，进度看
+     * <p>用户可以先把几份都下好再挑一份用；下载走后台线程（界面上有前台窗口实时显示进度），状态看
      * {@code /api/runtime/local} 的 phase=downloading + downloadBytes/downloadTotal。
      */
     @PostMapping("/local/models/download")
@@ -329,7 +329,7 @@ public class RuntimeController {
             return new ApiResponse<>(false, null, localRuntime.status(), String.valueOf(r.get("error")));
         }
         log.info("用户请求下载模型权重: {}", file);
-        return ApiResponse.ok("已开始在后台下载 " + file + "（进度见顶部横幅；下完可在列表里点「使用」）",
+        return ApiResponse.ok("已开始下载 " + file + "（进度就在界面上；下完可点「立即使用」）",
             localRuntime.status());
     }
 
@@ -413,7 +413,7 @@ public class RuntimeController {
         // 后台下载：以前这里同步等下完，8.87 GB 会把界面按钮堵十几分钟
         Map<String, Object> r = localRuntime.startDownload(file);
         if (Boolean.TRUE.equals(r.get("started"))) {
-            return ApiResponse.ok("已切换到 " + file + "，权重正在**后台下载**（进度见顶部横幅），下完就能用", st);
+            return ApiResponse.ok("已切换到 " + file + "，权重正在下载（进度就在界面上的下载窗口里），下完就能用", st);
         }
         return ApiResponse.ok("已切换到 " + file + "（尚未下载：" + r.get("error") + "）", st);
     }
@@ -448,7 +448,7 @@ public class RuntimeController {
         // 后台下：以前是同步等，8.87 GB 会把界面按钮堵十几分钟（进度也看不见）
         Map<String, Object> r = localRuntime.startDownload(file);
         if (Boolean.TRUE.equals(r.get("started"))) {
-            return ApiResponse.ok("已开始在后台下载 " + file + "（进度见顶部横幅）", localRuntime.status());
+            return ApiResponse.ok("已开始下载 " + file + "（进度就在界面上的下载窗口里）", localRuntime.status());
         }
         return new ApiResponse<>(false, null, localRuntime.status(), String.valueOf(r.get("error")));
     }

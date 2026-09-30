@@ -1280,7 +1280,7 @@ var App = {
                  +  self.escapeAttr(mdir) + '">' + self.escapeHtml(mdir) + '</span></div>'
                  +  '<div>下载的权重都放在这里；<b style="color:#e8e8f0">你自己的 .gguf 直接丢进去，'
                  +  '下面就会出现，点「使用」就行</b>。一份权重一个文件，'
-                 +  '可以同时存好几份。</div>'
+                 +  '可以同时存好几份（下载进度会弹窗显示）。</div>'
                  +  '<div style="margin-top:7px">'
                  +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 打开文件夹</button>'
                  +  '<button class="btn btn-sm" style="margin-left:6px" onclick="App.renderLlamaTab()">🔄 刷新</button>'
@@ -1438,10 +1438,150 @@ var App = {
         }).catch(function(e) { if (msg) msg.textContent = '保存失败：' + e; });
     },
 
-    /** 切换/使用某个模型（没下载的会在**后台**开始下，不再把这个请求堵上十几分钟） */
+    /** 模型清单里找一行（窗口里要显示名字与体积） */
+    modelRow: function(file) {
+        var list = App.modelsCache || [];
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].file === file) { return list[i]; }
+        }
+        return { file: file, label: file, downloaded: false };
+    },
+
+    /**
+     * 前台下载窗口：点「使用」或「下载」就弹出来，进度就在里面走。
+     *
+     * 以前只弹一句浏览器原生提示，写着“会在后台下载”—— 用户看到的是“东西在背后
+     * 悄悄下”，不知道到底在干什么。现在下载是一件**前台可见**的事：
+     * 名字、体积、进度条、速度、剩余时间都在窗口里，下完当场给「立即使用」，
+     * 失败当场给原因和「重试」。关掉窗口不影响下载（下面那块面板还在跟着走）。
+     */
+    openDownloadDialog: function(file, mode) {
+        App._dlgFile = file;
+        App._dlgMode = mode || 'download';      // download = 只下不切；use = 下完就用它
+        var m = App.modelRow(file);
+        var sizeTxt = m.sizeText || (m.sizeGb ? (m.sizeGb + ' GB') : '');
+        var html = '<div style="font-size:13.5px;color:#e8e8f0;margin-bottom:4px">'
+                 + App.escapeHtml(m.label || file) + '</div>'
+                 + '<div style="font-size:11.5px;color:#6a6a80;font-family:monospace;margin-bottom:12px">'
+                 + App.escapeHtml(file) + (sizeTxt ? ' · ' + sizeTxt : '') + '</div>'
+                 + '<div id="dlgState" style="font-size:12.5px;color:#fdcb6e;margin-bottom:8px">'
+                 + '正在准备下载…</div>'
+                 + '<div style="height:12px;background:#12121f;border:1px solid #2d2d4a;'
+                 + 'border-radius:6px;overflow:hidden">'
+                 + '<div id="dlgFill" style="height:100%;width:0%;'
+                 + 'background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div></div>'
+                 + '<div style="display:flex;justify-content:space-between;font-size:11.5px;'
+                 + 'color:#a0a0b8;margin-top:6px">'
+                 + '<span id="dlgBytes">0 MB</span><span id="dlgPct">0%</span>'
+                 + '<span id="dlgSpeed"></span></div>'
+                 + '<div id="dlgBtns" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">'
+                 + '<button class="btn btn-sm" onclick="App.collapseDownloadDialog()">收起（下载继续）</button>'
+                 + '</div>';
+        App.openModal('模型下载', html);
+    },
+
+    /** 收起窗口（下载不停，面板上还能看） */
+    collapseDownloadDialog: function() {
+        App._dlgFile = null;
+        App.closeModal();
+    },
+
+    /** 窗口里的“立即使用”：已经配好的就重启加载，只下不切的就切过去 */
+    dialogUseNow: function() {
+        var file = App._dlgFile;
+        App.collapseDownloadDialog();
+        if (!file) { return; }
+        if (App._dlgMode === 'use') { App.restartLocalModel(); }
+        else { App.switchLlamaModel(file); }
+    },
+
+    /** 把当前状态刷到下载窗口里（由 tickLocal 每拍调） */
+    updateDownloadDialog: function(st) {
+        var file = App._dlgFile;
+        if (!file) { return; }
+        var fill = document.getElementById('dlgFill');
+        if (!fill) { return; }                      // 窗口已经关了
+        var state = document.getElementById('dlgState');
+        var m = App.modelRow(file);
+        var phase = st.phase || '';
+        var downloading = phase === 'downloading'
+            && (!st.downloadingFile || st.downloadingFile === file);
+        var bytes = st.downloadBytes || 0, total = st.downloadTotal || 0;
+
+        if (downloading) {
+            var pct = total > 0 ? Math.floor(bytes * 100 / total) : 0;
+            fill.style.width = pct + '%';
+            document.getElementById('dlgPct').textContent = pct + '%';
+            document.getElementById('dlgBytes').textContent =
+                App.mbText(bytes) + (total > 0 ? ' / ' + App.mbText(total) : '');
+            document.getElementById('dlgSpeed').textContent = App._dlSpeedTxt || '';
+            state.style.color = '#fdcb6e';
+            state.textContent = '正在下载…（关掉这个窗口也会继续下）';
+            return;
+        }
+        if (m.downloaded) {
+            fill.style.width = '100%';
+            document.getElementById('dlgPct').textContent = '100%';
+            state.style.color = '#00b894';
+            state.textContent = '✓ 下载完成，可以用了';
+            document.getElementById('dlgBtns').innerHTML =
+                '<button class="btn btn-sm" onclick="App.collapseDownloadDialog()">关闭</button>'
+                + '<button class="btn btn-sm btn-primary" onclick="App.dialogUseNow()">立即使用</button>';
+            return;
+        }
+        if (phase === 'failed') {
+            fill.style.background = '#e17055';
+            state.style.color = '#e17055';
+            state.textContent = '✗ 下载失败：' + (st.lastError || '原因见日志');
+            document.getElementById('dlgBtns').innerHTML =
+                '<button class="btn btn-sm" onclick="App.collapseDownloadDialog()">关闭</button>'
+                + '<button class="btn btn-sm" onclick="App.retryDownloadDialog()">重试</button>';
+        }
+    },
+
+    /** 窗口里的「重试」 */
+    retryDownloadDialog: function() {
+        var file = App._dlgFile;
+        if (!file) { return; }
+        var fill = document.getElementById('dlgFill');
+        if (fill) { fill.style.background = 'linear-gradient(90deg,#6c5ce7,#00b894)'; }
+        var state = document.getElementById('dlgState');
+        if (state) { state.style.color = '#fdcb6e'; state.textContent = '重新开始下载…'; }
+        App.startDownload(file);
+    },
+
+    /** 发起下载（窗口与面板都指向它） */
+    startDownload: function(file) {
+        App.startLocalWatcher(true);
+        if (App.refreshModelCache) { App.refreshModelCache(); }
+        fetch('/api/runtime/local/models/download', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({file: file})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            var state = document.getElementById('dlgState');
+            if (!res || !res.success) {
+                if (state) {
+                    state.style.color = '#e17055';
+                    state.textContent = '✗ 没能开始下载：' + ((res && res.error) || '');
+                }
+                return;
+            }
+            var msg = document.getElementById('llamaMsg');
+            if (msg) { msg.textContent = res.message || ('已开始下载 ' + file); }
+            App.tickLocal();
+        }).catch(function(e) {
+            var state = document.getElementById('dlgState');
+            if (state) { state.style.color = '#e17055'; state.textContent = '✗ 没能开始下载：' + e; }
+        });
+    },
+
+    /** 切换/使用某个模型（没下载的话先把下载窗口弹出来） */
     switchLlamaModel: function(file) {
-        if (!confirm('用 ' + file + '？\n\n没下过的话会在后台下载（几百 MB 到 9 GB，进度看顶部横幅）。')) return;
-        App.startLocalWatcher(true);   // 缺权重的话会在后台下，进度条马上出来
+        var m = App.modelRow(file);
+        if (!m.downloaded) {
+            App.openDownloadDialog(file, 'use');    // 前台窗口：进度就在里面
+        }
+        App.startLocalWatcher(true);
         var msg = document.getElementById('llamaMsg');
         if (msg) msg.textContent = '正在切换…';
         fetch('/api/runtime/local/model', {
@@ -1451,25 +1591,15 @@ var App = {
             if (msg) msg.textContent = (res && res.success)
                 ? ((res.message || '已切换') + '（' + file + '）')
                 : ('切换失败：' + ((res && res.error) || ''));
+            App.tickLocal();
             setTimeout(function() { App.renderLlamaTab(); }, 1200);
         }).catch(function(e) { if (msg) msg.textContent = '切换失败：' + e; });
     },
 
     /** 只下载这一份（不切换）：可以把几份都先下好，再挑一份用 */
     downloadLlamaModel: function(file) {
-        App.startLocalWatcher(true);   // 立刻开始盯，前台进度条马上出来
-        if (App.refreshModelCache) { App.refreshModelCache(); }
-        var msg = document.getElementById('llamaMsg');
-        if (msg) msg.textContent = '已开始下载 ' + file + '（后台进行，进度看顶部横幅）…';
-        fetch('/api/runtime/local/models/download', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({file: file})
-        }).then(function(r) { return r.json(); }).then(function(res) {
-            if (msg) msg.textContent = (res && res.success)
-                ? (res.message || '已开始下载')
-                : ('下载没启动：' + ((res && res.error) || ''));
-            setTimeout(function() { App.renderLlamaTab(); }, 1500);
-        }).catch(function(e) { if (msg) msg.textContent = '下载没启动：' + e; });
+        App.openDownloadDialog(file, 'download');
+        App.startDownload(file);
     },
 
     /** 打开模型目录（想自己往里面塞 GGUF 时用） */
@@ -1656,8 +1786,8 @@ var App = {
             html += '<button class="btn" onclick="App.unloadLocalModel()">卸载模型（释放显存）</button>';
             html += '<div id="warmupStatus" style="margin-top:8px;font-size:12px;color:#6a6a80"></div>';
             html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80">'
-                 +  '权重不随安装包分发：你在下面选了哪份，软件一启动就在<b>后台自动下那一份</b>'
-                 +  '（不占显存，进度看顶部横幅；也可以点「下载模型」手动催）。<br>'
+                 +  '权重不随安装包分发：你在下面选了哪份，软件一启动就开始下那一份'
+                 +  '（不占显存，进度就在输入框上面那块「模型」面板里；也可以点「下载模型」）。<br>'
                  +  '没下完也不耽误聊天：会先用目录里现成的那份，并在上面如实说明用的是哪份。'
                  +  '如果用自定义 API，本地模型永远不会被加载。<br>'
                  +  '<b>纯 CPU 推理时建议点一次「预热提示词」</b>：它会把系统提示词和工具定义'
@@ -1889,8 +2019,9 @@ var App = {
      */
     downloadLocalModel: function() {
         var box = document.getElementById('localStatus');
-        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在从 ModelScope 下载权重…'
-                      + '（只下一次，不占显存；体积见下面「模型版本」）</span>';
+        var cur = (document.getElementById('llama_modelFile') || {}).value || '';
+        if (cur) { App.openDownloadDialog(cur, 'download'); }
+        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在下载体积…（进度在下面那个窗口里）</span>';
         fetch('/api/runtime/local/download', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
@@ -1994,6 +2125,7 @@ var App = {
             App._lastLocal = st;
             App.renderDownloadBar(st);
             App.renderModelPanel();
+            App.updateDownloadDialog(st);
         }).catch(function() { /* 网络抖一下就等下一拍 */ });
     },
 
