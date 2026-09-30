@@ -96,16 +96,29 @@ while IFS= read -r f; do
 done <<< "$DEV_FILES"
 echo "  新增 $count_new 个"
 
-# ---- 3) 安装包换名：旧的从发布树里删掉，新的强制加进去 ----
-# （installer/release/ 在 .gitignore 里，所以必须 -f）
-for old in $(git -c core.quotepath=false ls-tree -r --name-only dshlion/main | grep '^installer/release/.*\.exe$' || true); do
+# ---- 3) 安装包 / 插件包：installer/release 下的**所有**产物都发 ----
+# （该目录在 .gitignore 里，所以必须 -f）
+#
+# 【2026-09-30 改法】以前这里写死"只发 LionBox-Setup-$ver.exe"，于是 1.5.0 新增的
+# VS Code .vsix 和 JetBrains .zip 进不了公开仓库（只有主包进得去）。改成扫目录。
+# 顺手加一道 100MB 上限判断：GitHub 单文件硬上限是 100MB，超了会把整个 push 打回去
+# （桌面版 Electron 安装包 178MB 就是这种情况，它只能走 GitHub Releases）。
+for old in $(git -c core.quotepath=false ls-tree -r --name-only dshlion/main | grep '^installer/release/' || true); do
   if [ ! -e "$old" ]; then
     git rm --cached -q "$old" 2>/dev/null || true
-    echo "  旧安装包从公开树删掉: $old"
+    echo "  旧产物从公开树删掉: $old"
   fi
 done
-ver=$(sed -n 's/^#define AppVersion[[:space:]]*"\([^"]*\)".*/\1/p' installer/LionBox.iss | head -1)
-git add -f "installer/release/LionBox-Setup-$ver.exe"
+for f in installer/release/*; do
+  [ -e "$f" ] || continue
+  size=$(stat -c %s "$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt 104857600 ]; then
+    echo "  跳过（$(($size / 1048576))MB > GitHub 100MB 上限，要走 Releases）: $(basename "$f")"
+    continue
+  fi
+  git add -f -- "$f"
+  echo "  发布产物: $(basename "$f")（$(($size / 1048576))MB）"
+done
 
 echo "--- 相对 dshlion/main 的改动 ---"
 tree=$(git write-tree)
