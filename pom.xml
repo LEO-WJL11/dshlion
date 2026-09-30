@@ -138,8 +138,10 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <source>${java.version}</source>
-                    <target>${java.version}</target>
+                    <!-- 用 release 而不是 source/target 两个参数：JDK 26 下 source 21 会告警
+                         （系统模块路径没设），而且 release 会真按 Java 21 的 API 面编译：
+                         我们打包用的是 Java 21 的 jlink 运行时，用错 API 会在用户机器上炸。 -->
+                    <release>${java.version}</release>
                     <encoding>UTF-8</encoding>
                     <!-- 关键：Spring MVC需要方法参数名反射（@PathVariable/@RequestParam） -->
                     <parameters>true</parameters>

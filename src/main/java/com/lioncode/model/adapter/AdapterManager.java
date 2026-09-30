@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 适配器管理器
  * 
  * 管理所有模型协议适配器的注册、切换和状态保护。
- * 盒子出厂固定使用OpenAI兼容协议适配器对接本地模型运行时。
+ * 出厂固定使用OpenAI兼容协议适配器对接本地模型运行时。
  * 切换过程保护关键会话状态。
  */
 @Component

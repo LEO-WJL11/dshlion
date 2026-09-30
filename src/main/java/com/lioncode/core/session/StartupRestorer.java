@@ -17,7 +17,7 @@ import java.util.Map;
  * 
  * 应用启动时执行：
  * 1. 从磁盘恢复所有会话（含绑定的工作区）
- * 2. 恢复模型适配器的 baseUrl 配置（指向盒子本地运行时）
+ * 2. 恢复模型适配器的 baseUrl 配置（指向本地运行时）
  * 3. 恢复上次激活的适配器
  * 
  * 对话历史由 ConversationHistory 自行恢复。
@@ -87,7 +87,7 @@ public class StartupRestorer implements ApplicationRunner {
         String baseUrl = saved.get("baseUrl") instanceof String s ? s : null;
         String apiKey = saved.get("apiKey") instanceof String s ? s : null;
 
-        // 盒子出厂零配置：适配器级配置缺失时，回落到应用级默认（AppConfigStore
+        // 出厂零配置：适配器级配置缺失时，回落到应用级默认（AppConfigStore
         // 已把 baseUrl 强制指向本地模型运行时），避免首次开机适配器不可用。
         // 仅对OpenAI兼容协议生效：本地运行时只说该协议。
         if ((baseUrl == null || baseUrl.isBlank())
@@ -95,7 +95,7 @@ public class StartupRestorer implements ApplicationRunner {
             String fallback = configStore.get("baseUrl", null);
             if (fallback instanceof String s && !s.isBlank()) {
                 baseUrl = s;
-                log.info("适配器 {} 未保存端点，回落到盒子默认本地端点: {}", type, baseUrl);
+                log.info("适配器 {} 未保存端点，回落到默认本地端点: {}", type, baseUrl);
             }
         }
 

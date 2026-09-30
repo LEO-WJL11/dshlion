@@ -27,9 +27,9 @@ import java.util.concurrent.TimeUnit;
  * - 版本头
  * - 不同于OpenAI的消息格式
  * 
- * 盒子说明：出厂只提供本地模型运行时（OpenAI兼容协议），
+ * 说明：出厂只提供本地模型运行时（OpenAI兼容协议），
  * 此适配器不预设任何外部端点、不内置任何云端模型清单，
- * 必须由盒子显式配置端点后才可用。
+ * 必须显式配置端点后才可用。
  * 
  * 特性：
  * - 同步/流式调用
@@ -44,7 +44,7 @@ public class AnthropicAdapter implements ModelAdapter {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final String ANTHROPIC_VERSION = "2023-06-01";
 
-    /** 盒子场景不预设任何外部端点：必须显式配置才可用 */
+    /** 本地场景不预设任何外部端点：必须显式配置才可用 */
     private String baseUrl = "";
     private String apiKey = "";
     private final OkHttpClient httpClient;
@@ -199,7 +199,7 @@ public class AnthropicAdapter implements ModelAdapter {
 
     @Override
     public List<ModelInfo> getAvailableModels() {
-        // 盒子出厂只内置本地模型：此适配器不内置任何云端模型清单，
+        // 出厂只内置本地模型：此适配器不内置任何云端模型清单，
         // 避免UI或接口出现云端模型选项。
         return List.of();
     }
@@ -287,7 +287,7 @@ public class AnthropicAdapter implements ModelAdapter {
     /**
      * 判断模型是否支持扩展思考
      * 
-     * 盒子本地模型运行时使用OpenAI兼容协议，此适配器不参与思考等级协商。
+     * 本地模型运行时使用OpenAI兼容协议，此适配器不参与思考等级协商。
      */
     private boolean supportsThinking(String modelId) {
         return false;

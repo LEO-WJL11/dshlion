@@ -47,7 +47,9 @@ public class UserQuestionService {
         String sessionId,
         String question,
         List<String> options,
-        long askedAt
+        long askedAt,
+        /** 最多等多久（秒）。界面上可以据此显示倒计时；也方便确认"下限 30 秒"生效了。 */
+        int timeoutSeconds
     ) {}
 
     /** 一次提问的等待状态 */
@@ -77,7 +79,7 @@ public class UserQuestionService {
         String id = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         List<String> opts = options == null ? List.of() : new ArrayList<>(options);
 
-        Pending p = new Pending(id, sessionId, question, opts, System.currentTimeMillis());
+        Pending p = new Pending(id, sessionId, question, opts, System.currentTimeMillis(), timeout);
         Waiter w = new Waiter();
         pending.put(id, p);
         waiters.put(id, w);
@@ -203,6 +205,8 @@ public class UserQuestionService {
         m.put("question", p.question());
         m.put("options", p.options());
         m.put("askedAt", p.askedAt());
+        m.put("timeoutSeconds", p.timeoutSeconds());
+        m.put("deadlineAt", p.askedAt() + p.timeoutSeconds() * 1000L);
         return m;
     }
 }

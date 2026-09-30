@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 模型提供商配置控制器
  * 
- * 盒子说明：本产品为硬件一体机，内置模板只有一项——随盒子交付的本地模型运行时。
+ * 说明：内置模板只有一项 —— 本机自带的本地模型运行时（回环地址）。
  * 不再提供任何云端厂商模板、API-Key录入或Token-Plan订阅网关。
  * 
  * 功能：
@@ -101,9 +101,9 @@ public class ProviderController {
                 return ApiResponse.error("未找到提供商模板: " + request.providerId());
             }
 
-            // 盒子只允许本地模型运行时：拒绝任何非回环的自定义端点
+            // 本地模式只允许回环端点：拒绝任何非回环的自定义端点
             if (template.isEmpty() && !isLoopbackUrl(request.customBaseUrl())) {
-                return ApiResponse.error("本产品仅支持盒子本地模型端点（回环地址），不支持外部服务商: " 
+                return ApiResponse.error("本产品仅支持本机（回环地址）的模型端点，不支持外部服务商: " 
                     + request.providerId());
             }
 
@@ -278,7 +278,7 @@ public class ProviderController {
     }
 
     /**
-     * 判断给定Base URL是否为回环地址（盒子本地模型运行时）
+     * 判断给定Base URL是否为回环地址（本地模型运行时）
      */
     private static boolean isLoopbackUrl(String url) {
         if (url == null || url.isBlank()) {

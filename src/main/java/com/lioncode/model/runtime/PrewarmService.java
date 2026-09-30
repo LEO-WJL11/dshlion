@@ -24,14 +24,14 @@ import java.util.Map;
  *
  * <h3>为什么需要它</h3>
  * 预填充（prompt processing）是算力受限的，而我们的请求里「系统提示词 + 54 个工具的
- * 定义」有 8-9K token。在纯 CPU 盒子上（22 核 AVX2，约 20-30 tok/s 预填充速度），
- * 冷启动第一条消息要等好几分钟才吐出第一个字 —— 这是盒子版最大的体验风险。
+ * 定义」有 8-9K token。在纯 CPU 机器上（22 核 AVX2，约 20-30 tok/s 预填充速度），
+ * 冷启动第一条消息要等好几分钟才吐出第一个字 —— 这是本地版最大的体验风险。
  *
  * 但 llama-server 会把已处理的 token 留在 slot 的 KV cache 里，下次请求只要
  * **前缀相同**，就只处理新增的那一段。于是把这段开销挪到用户提问之前：
  *
  * <pre>
- *   盒子/客户端启动 → 加载模型 → 发一次「系统提示词 + 一句废话」（max_tokens=1）
+ *   本机启动 → 加载模型 → 发一次「系统提示词 + 一句废话」（max_tokens=1）
  *   → 前缀缓存填好了
  *   用户提问 → 只预填充自己那句话（几十个 token）→ 秒回
  * </pre>
@@ -63,7 +63,7 @@ public class PrewarmService {
 
     /**
      * 部署级默认值（application.yml）。
-     * 盒子镜像会把 on-start 设成 true；客户端保持 false，免得用户一开机就占几个 G 内存。
+     * 服务端镜像会把 on-start 设成 true；客户端保持 false，免得用户一开机就占几个 G 内存。
      * 用户还可以在 app-config.json 里覆盖（界面开关），两边都读。
      */
     @org.springframework.beans.factory.annotation.Value("${lionbox.prewarm.on-start:false}")
@@ -100,7 +100,7 @@ public class PrewarmService {
      *
      * 客户端（模型跑在用户自己电脑上）默认**不预热** —— 用户可能只想看看界面、
      * 或者打算用自己的 API，没必要一开机就占几个 G 内存。
-     * 盒子版把 lionbox.prewarm.on-start 打开，开机即热。
+     * 本地版把 lionbox.prewarm.on-start 打开，开机即热。
      */
     @EventListener(ContextRefreshedEvent.class)
     public void onStartup() {
@@ -215,7 +215,7 @@ public class PrewarmService {
         return "当前是自己填的 API 端点，不做预热（避免白花 token 费用）";
     }
 
-    /** 当前是否指向自带端点（本机或盒子），而不是用户自填的云端 API */
+    /** 当前是否指向自带端点（本机），而不是用户自填的云端 API */
     private boolean isBuiltinEndpoint() {
         if ("local".equals(configStore.get("providerMode", "local"))) {
             return true;
