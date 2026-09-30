@@ -36,6 +36,32 @@ public class GitRemoteTool extends AbstractToolPlugin {
         ), "required", new String[]{"path", "action"});
     }
 
+    /** 猜一个远程名：没配过远程就叫 origin，否则用地址里的仓库名（去掉 .git） */
+    private String inferRemoteName(String repoPath, String url) {
+        try {
+            Process p = new ProcessBuilder(gitExecutable(), "remote")
+                .directory(new File(repoPath)).redirectErrorStream(true).start();
+            if (p.waitFor(10, TimeUnit.SECONDS)) {
+                String out = new String(p.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+                if (out.isEmpty()) {
+                    return "origin";               // 一个远程都没有 → 惯例就是 origin
+                }
+            } else {
+                p.destroyForcibly();
+            }
+        } catch (Exception ignored) {
+            // 问不出来就按仓库名猜
+        }
+        String base = url.replaceAll("[#?].*$", "").replaceAll("/+$", "");
+        int i = Math.max(base.lastIndexOf('/'), base.lastIndexOf(':'));
+        if (i >= 0 && i + 1 < base.length()) {
+            base = base.substring(i + 1);
+        }
+        base = base.replaceAll("\\.git$", "").trim();
+        return base.isEmpty() ? "origin" : base;
+    }
+
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
         try {
@@ -56,8 +82,15 @@ public class GitRemoteTool extends AbstractToolPlugin {
                 case "add" -> {
                     String name = getStringArg(arguments, "name", null);
                     String url = getStringArg(arguments, "url", null);
-                    if (name == null || name.isBlank() || url == null || url.isBlank()) {
-                        return error("add 操作需要 name（远程名，如 origin）和 url（仓库地址）两个参数");
+                    if (url == null || url.isBlank()) {
+                        return error("add 操作至少要给 url（仓库地址），例如 "
+                            + "{\"action\":\"add\",\"url\":\"https://github.com/you/repo.git\"}"
+                            + "；name 可以不给，会自动取 origin 或仓库名");
+                    }
+                    // name 经常被漏传（实测就是这么失败的）：没配过远程就叫 origin，
+                    // 已经有一个远程了就用地址里的仓库名，别为了个名字把整件事卡住。
+                    if (name == null || name.isBlank()) {
+                        name = inferRemoteName(path, url);
                     }
                     pb = new ProcessBuilder(gitExecutable(), "remote", "add", name, url);
                 }
@@ -101,8 +134,22 @@ public class GitRemoteTool extends AbstractToolPlugin {
                 return error("git 命令超时（30 秒没返回）：多半在等网络或凭据。"
                     + "远程操作用 -n 只看本地配置，或先确认网络/凭据。");
             }
-            String output = new String(process.getInputStream().readAllBytes());
-            return success(output.isEmpty() ? "（无远程仓库）" : output);
+            String output = new String(process.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (!output.isEmpty()) {
+                return success(output);
+            }
+            // 没输出 != 失败：git remote add / set-url / remove 成功时本来就不打印任何东西。
+            // 以前这里一律回"（无远程仓库）"，add 成功看着也像没加上。
+            String nm = getStringArg(arguments, "name", "");
+            String u = getStringArg(arguments, "url", "");
+            return success(switch (action) {
+                case "add" -> "已添加远程 " + nm + " → " + u + "（git 成功时本来就没有输出）";
+                case "set-url", "seturl" -> "已把远程 " + nm + " 的地址改成 " + u;
+                case "remove", "rm" -> "已删除远程 " + nm;
+                case "list", "ls" -> "（这个仓库没有配置任何远程）";
+                default -> "（git 没有输出，命令已执行）";
+            });
         } catch (Exception e) {
             return error("Git remote操作失败: " + e.getMessage());
         }

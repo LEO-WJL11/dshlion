@@ -35,7 +35,8 @@ public class GitDiffTool extends AbstractToolPlugin {
             "type", "object",
             "properties", Map.of(
                 "path", Map.of("type", "string", "description", "Git仓库路径"),
-                "file", Map.of("type", "string", "description", "指定文件（可选）"),
+                "file", Map.of("type", "string", "description", "指定文件（可选，会自动放到 -- 后面）"),
+                "rev", Map.of("type", "string", "description", "版本/范围（可选），如 HEAD~1、main..dev"),
                 "cached", Map.of("type", "boolean", "description", "查看暂存区差异", "default", false)
             ),
             "required", new String[]{"path"}
@@ -53,7 +54,17 @@ public class GitDiffTool extends AbstractToolPlugin {
             cmd.add("git");
             cmd.add("diff");
             if (cached) cmd.add("--cached");
-            if (file != null) cmd.add(file);
+            String rev = getStringArg(arguments, "rev", null);
+            if (rev != null && !rev.isBlank()) {
+                cmd.add(rev);                       // 例如 HEAD~1 或 main..dev
+            }
+            // 【坑】文件路径必须放在 `--` 后面。直接当位置参数传的话 git 会把它
+            // 当成 revision 去解析，实测报 "fatal: ambiguous argument 'x.txt'"
+            // —— 用户那次 git_diff 就是这么失败的。
+            if (file != null && !file.isBlank()) {
+                cmd.add("--");
+                cmd.add(file);
+            }
 
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(new File(path));

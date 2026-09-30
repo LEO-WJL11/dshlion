@@ -1,5 +1,8 @@
 package com.lioncode.core.agent;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +36,10 @@ import java.util.regex.Pattern;
  * {@code java -cp target/classes com.lioncode.core.agent.QwenToolCallParser}
  */
 public final class QwenToolCallParser {
+
+    /** 读 JSON 参数用（只读，线程安全） */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
 
     private QwenToolCallParser() {
     }
@@ -86,6 +93,12 @@ public final class QwenToolCallParser {
             while (pm.find()) {
                 args.put(pm.group(1).trim(), unescape(pm.group(2)));
             }
+            if (args.isEmpty()) {
+                // 【兜底】模型也常把参数写成 JSON 对象塞在 function 里（我们自己的用例、
+                // 以及部分模板都这么发）。只认 <parameter=…> 的话这种调用会被当成
+                // "没有参数"，工具回一句"缺少必需参数"，整轮就废了 —— 实测踩过。
+                args.putAll(parseJsonArguments(fn.group(2)));
+            }
             calls.add(new Call(name, args));
         }
         return calls;
@@ -103,6 +116,42 @@ public final class QwenToolCallParser {
         String out = Pattern.compile("(?s)<tool_call>.*?</tool_call>").matcher(text).replaceAll(" ");
         out = FUNCTION.matcher(out).replaceAll(" ");
         return out.trim();
+    }
+
+    /**
+     * 把 {@code <function=…>} 里那块内容当 JSON 对象读出来（读不出来就返回空 Map）。
+     *
+     * <p>兼容三种常见写法：纯 JSON、```json 围栏、以及前面带一句解释的文字 + JSON。
+     */
+    private static Map<String, Object> parseJsonArguments(String body) {
+        if (body == null || body.isBlank()) {
+            return Map.of();
+        }
+        String t = body.trim();
+        // 去掉 ```json … ``` 围栏
+        if (t.startsWith("```")) {
+            int nl = t.indexOf('\n');
+            if (nl > 0) {
+                t = t.substring(nl + 1);
+            }
+            if (t.endsWith("```")) {
+                t = t.substring(0, t.length() - 3);
+            }
+            t = t.trim();
+        }
+        // 只取第一个 { 到最后一个 }（前面可能有一句"我来调用一下："）
+        int b = t.indexOf('{');
+        int e = t.lastIndexOf('}');
+        if (b < 0 || e <= b) {
+            return Map.of();
+        }
+        String json = t.substring(b, e + 1);
+        try {
+            Map<String, Object> m = MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            return m == null ? Map.of() : m;
+        } catch (Exception ex) {
+            return Map.of();      // 不是 JSON 就当没参数，跟以前一样
+        }
     }
 
     /** 值就是原样的文本；只去掉首尾空白（多行命令要保留内部换行） */

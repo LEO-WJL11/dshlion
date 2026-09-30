@@ -21,14 +21,16 @@ public enum AgentMode {
     /**
      * PTC 模式：预规划后执行。
      *
-     * @deprecated 不再开放给用户，老数据兼容用；会被 {@link #normalize(AgentMode)} 归一成 STANDARD
+ * <p>已不再开放给用户（历史模式），只用于兼容老数据；
+     * 拿到它会被 {@link #normalize(AgentMode)} 归一成 STANDARD。
      */
     PTC("PTC", "预规划模式", "模型预先完整规划全部工具调用步骤再执行"),
 
     /**
      * 创造模式：可管理插件。
      *
-     * @deprecated 不再开放给用户，老数据兼容用；会被 {@link #normalize(AgentMode)} 归一成 STANDARD
+ * <p>已不再开放给用户（历史模式），只用于兼容老数据；
+     * 拿到它会被 {@link #normalize(AgentMode)} 归一成 STANDARD。
      */
     CREATIVE("CREATIVE", "创造模式", "AI可以编写、修改、安装、卸载插件"),
 

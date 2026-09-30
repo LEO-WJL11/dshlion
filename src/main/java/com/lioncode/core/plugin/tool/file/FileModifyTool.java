@@ -39,10 +39,24 @@ public class FileModifyTool extends AbstractToolPlugin {
                 "operation", Map.of("type", "string", "description", "操作类型: replace / insert / delete / append（追加到末尾）"),
                 "startLine", Map.of("type", "integer", "description", "起始行号"),
                 "endLine", Map.of("type", "integer", "description", "结束行号（replace操作）"),
-                "content", Map.of("type", "string", "description", "新内容")
+                "content", Map.of("type", "string", "description", "新内容"),
+                "oldText", Map.of("type", "string",
+                    "description", "replace 用：要替换掉的原文（给了它就不用行号）"),
+                "all", Map.of("type", "boolean",
+                    "description", "replace 用：是否替换所有出现（默认只替换第一处）")
             ),
             "required", new String[]{"path", "operation"}
         );
+    }
+
+    /** 按原文替换时数一下替换了几处 */
+    private int countOccurrences(String haystack, String needle) {
+        int n = 0, i = 0;
+        while ((i = haystack.indexOf(needle, i)) >= 0) {
+            n++;
+            i += needle.length();
+        }
+        return n;
     }
 
     @Override
@@ -63,11 +77,37 @@ public class FileModifyTool extends AbstractToolPlugin {
 
             switch (operation) {
                 case "replace" -> {
+                    // ① 给了 oldText 就按文本替换（最省事，也不用数行号 ——
+                    //    实测模型经常只给 content 不给行号，以前直接报"行号超出范围: 0"）。
+                    String oldText = getStringArg(arguments, "oldText", null);
+                    if (oldText != null && !oldText.isBlank()) {
+                        String full = String.join("\n", lines);
+                        if (!full.contains(oldText)) {
+                            return error("要替换的原文没找到（oldText 要和文件里一字不差，"
+                                + "先用 read_file 看一眼）：" + oldText.substring(0,
+                                    Math.min(60, oldText.length())));
+                        }
+                        boolean all = Boolean.TRUE.equals(arguments.get("all"));
+                        String replaced = all
+                            ? full.replace(oldText, content)
+                            : full.replaceFirst(java.util.regex.Pattern.quote(oldText),
+                                java.util.regex.Matcher.quoteReplacement(content));
+                        writeTextPreservingCharset(filePath, replaced);
+                        int times = all ? countOccurrences(full, oldText) : 1;
+                        return success("已替换 " + times + " 处（按原文匹配）：" + path);
+                    }
+                    // ② 没给 oldText 就得给行号；这里把话说清楚，别只回一句"行号超出范围: 0"
+                    if (startLine < 1) {
+                        return error("replace 需要行号或原文：给 startLine（可加 endLine），"
+                            + "或者给 oldText + content 让我按原文替换");
+                    }
                     int endLine = arguments.containsKey("endLine") ? 
                         ((Number) arguments.get("endLine")).intValue() : startLine;
-                    if (startLine < 1 || startLine > lines.size()) {
-                        return error("行号超出范围: " + startLine);
+                    if (startLine > lines.size()) {
+                        return error("起始行号超出范围: " + startLine + "（这个文件只有 "
+                            + lines.size() + " 行）");
                     }
+                    endLine = Math.min(endLine, lines.size());
                     // 替换指定行范围
                     for (int i = endLine; i >= startLine; i--) {
                         lines.remove(i - 1);
@@ -78,7 +118,11 @@ public class FileModifyTool extends AbstractToolPlugin {
                     }
                 }
                 case "insert" -> {
-                    if (startLine < 1 || startLine > lines.size() + 1) {
+                    if (startLine < 1) {
+                        return error("insert 需要在第几行插入：给 startLine（1 = 文件开头，"
+                            + (lines.size() + 1) + " = 文件末尾）");
+                    }
+                    if (startLine > lines.size() + 1) {
                         return error("插入位置超出范围: " + startLine + " (有效范围: 1-" + (lines.size() + 1) + ")");
                     }
                     String[] newLines = content.split("\n");

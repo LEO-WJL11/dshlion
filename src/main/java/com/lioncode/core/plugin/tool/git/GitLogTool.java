@@ -62,8 +62,22 @@ public class GitLogTool extends AbstractToolPlugin {
                 return error("git 命令超时（30 秒没返回）：多半在等网络或凭据。"
                     + "远程操作用 -n 只看本地配置，或先确认网络/凭据。");
             }
-            String output = new String(process.getInputStream().readAllBytes());
-
+            String output = new String(process.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8).trim();
+            int exit = process.exitValue();
+            if (exit != 0) {
+                // 【坑】以前不管退出码，直接把 git 的 fatal 当成功吐回去：
+                // 空仓库会回一句 "fatal: your current branch 'master' does not have
+                // any commits yet"，模型看不懂，就反复重试（用户那次连试了三次）。
+                if (output.contains("does not have any commits") || output.contains("unknown revision")
+                    || output.contains("bad default revision")) {
+                    return success("（这个仓库还没有任何提交：先 create_file 建个文件，再 git_commit）");
+                }
+                if (output.contains("not a git repository")) {
+                    return error("这不是 git 仓库：" + path + "（先 git_init，path 指向工作区目录）");
+                }
+                return error("git log 失败:\n" + output);
+            }
             return success(output.isEmpty() ? "（无提交记录）" : output);
 
         } catch (Exception e) {

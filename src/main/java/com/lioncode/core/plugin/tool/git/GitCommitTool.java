@@ -76,9 +76,16 @@ public class GitCommitTool extends AbstractToolPlugin {
             int exitCode = process.exitValue();
             if (exitCode == 0) {
                 return success("提交成功:\n" + output);
-            } else {
-                return error("提交失败:\n" + output);
             }
+            // "没有改动"不是错误：报成错误会让模型以为参数写错了、反复重试（用户那次连试三次）。
+            if (output.contains("nothing to commit") || output.contains("no changes added")
+                || output.contains("nothing added to commit")) {
+                return success("（没有需要提交的改动：工作区是干净的，不用再试）");
+            }
+            if (output.contains("not a git repository")) {
+                return error("这不是 git 仓库（先 git_init）:\n" + output);
+            }
+            return error("提交失败:\n" + output);
 
         } catch (Exception e) {
             return error("Git提交失败: " + e.getMessage());

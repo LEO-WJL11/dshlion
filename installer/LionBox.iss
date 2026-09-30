@@ -62,7 +62,10 @@
 ;         进度条/速度/剩余时间都在里面走，下完当场给「立即使用」（不再用浏览器原生提示）
 ; 1.2.9：**设置里的模型一栏重做**：一份模型一张卡（一句话说清 + 一个按钮），
 ;         顶部一句"当前在用哪份"，llama.cpp 那堆参数收进「高级」折叠块
-#define AppVersion     "1.2.9"
+; 1.3.0：网络搜索改成**无头浏览器**（用系统里已装的 Edge/Chrome，不要 API 密钥）；
+;         修好用户实测坏掉的工具：git_diff 带文件参数、git_remote add 不给名字、
+;         git_log 空仓库、git_commit 无改动、modify_file 只给原文、word_count 非文本文件、translate 免密钥
+#define AppVersion     "1.3.0"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
