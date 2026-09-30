@@ -235,7 +235,7 @@ public class ChatController {
         if (model instanceof String s && !s.isBlank()) {
             return s;
         }
-        // 出厂默认：盒子内置本地模型
+        // 出厂默认：内置本地模型
         return "lion-models1";
     }
 

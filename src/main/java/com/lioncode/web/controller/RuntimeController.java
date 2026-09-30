@@ -20,7 +20,7 @@ import java.util.Map;
  * 两条使用路径：
  *
  * 【本地模型】
- *   用随盒子交付的 GGUF + llama.cpp。
+ *   用软件自带的 GGUF + llama.cpp。
  *   应用启动时**不加载**模型，用户发出第一条消息时才由 LocalModelRuntime 惰性拉起。
  *   这里额外提供手动"立即加载/卸载"，方便用户想提前热好、或想腾出显存。
  *

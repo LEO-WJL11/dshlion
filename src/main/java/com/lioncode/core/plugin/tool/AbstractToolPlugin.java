@@ -103,7 +103,7 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
     /**
      * 安全获取整数参数。
      *
-     * <p>【实测教训】文本通道（本地盒子默认）下，模型给的所有参数都是**字符串**：
+     * <p>【实测教训】文本通道（本地模式默认）下，模型给的所有参数都是**字符串**：
      * 它写 {@code <parameter=lines>5</parameter>}，工具里却是
      * {@code ((Number) arguments.get("lines")).intValue()} —— 直接
      * {@code ClassCastException: class java.lang.String cannot be cast to class java.lang.Number}，
@@ -356,7 +356,7 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
      *
      * <p>两条经验（都是实测踩出来的）：
      * <ol>
-     *   <li><b>别只收 String</b>：文本通道（本地盒子默认）下所有参数都是字符串，
+     *   <li><b>别只收 String</b>：文本通道（本地模式默认）下所有参数都是字符串，
      *       但云端模型常把数字/布尔当数字给（{@code {"input": 123}}），
      *       以前会误报"缺少必需参数"，模型以为自己给了、于是反复重试。这里统一转字符串。</li>
      *   <li><b>报错要能照着改</b>：只写"缺少必需参数: mode"，模型不知道 mode 该填什么。

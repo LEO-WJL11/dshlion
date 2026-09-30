@@ -26,7 +26,7 @@
 ; 1.1.5：工具别再来一遍（重复调用/连续失败守卫）+ 工具参数签名进提示词 + 网络工具快速失败
 ; 1.1.6：修掉 HTTP 500「System message must be at the beginning」+ 工具通道回到原生（--jinja 默认是开的）
 ; 1.1.7：一轮最多 3 个互不依赖的工具调用（轮数砍到 1/3）+ 本地生成封顶 1024（不再出现 6 分钟一轮）
-; 1.1.8：本地盒子改走文本通道（服务端会把多个 tool_call 块揉坏）+ 提示词给批量示例（一次 3 个）+ 生成长度撞顶自动升档
+; 1.1.8：本地本地改走文本通道（服务端会把多个 tool_call 块揉坏）+ 提示词给批量示例（一次 3 个）+ 生成长度撞顶自动升档
 ; 1.1.9：修文本通道下的参数类型 bug（数值参数以字符串给进来时工具直接 ClassCastException）
 ; 1.1.10：去掉 10 分钟硬超时（跑到第 70 个工具被砍断）+ 修 yaml_process/string_utils/git_stash/
 ;          execute_command/数值参数等失败
@@ -75,7 +75,10 @@
 ;         ③ 修报错工具：参数是字符串时的强转崩溃（head_tail_file 的 lines 等）、line_count 读 GBK 文件、
 ;         modify_file operation=create、git_branch 在空仓库里建分支、stop_background 不给 pid；
 ;         ④ 修界面**工具行重复刷屏**（web_search 出现 9 次、ask_user 20 次）
-#define AppVersion     "1.4.0"
+; 1.4.1：**不再做盒子（硬件一体机）了** —— 把代码/文档/界面里"盒子/硬件一体机/随盒子交付"
+;         这类说法全改成"本地模型运行时"（**只动文案，判断逻辑与端点限制一行没改**）；
+;         硬件板的设计文档和调研资料已从项目里删掉
+#define AppVersion     "1.4.1"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

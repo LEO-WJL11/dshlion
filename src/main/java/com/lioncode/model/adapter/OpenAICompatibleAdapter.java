@@ -23,8 +23,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * OpenAI兼容接口适配器
  * 
- * 本产品为硬件一体机（模型盒子），模型运行时随盒子交付并绑定回环地址，
- * 因此适配器**只**对接盒子本地端点（如 llama.cpp / LM-Studio 等GGUF推理服务），
+ * 本产品的模型运行时随软件自带、绑定回环地址，
+ * 因此适配器**只**对接本地端点（如 llama.cpp / LM-Studio 等GGUF推理服务），
  * 不再包含任何云端服务商地址。
  * 
  * 特性：
@@ -46,7 +46,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     private final OkHttpClient httpClient;
 
     /**
-     * 盒子本地模型运行时。
+     * 本地模型运行时。
      * 用来实现"启动不加载模型、第一条消息才加载"：
      * 发请求之前先看端点是不是由它托管，是就确保进程已经起来。
      * 用户填自己的 API 时 manages() 返回 false，永远不碰本地运行时。
@@ -109,7 +109,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     /**
      * 鉴权头取值
      * 
-     * 盒子本地运行时不需要API-Key，此处返回null表示不发送 Authorization 头；
+     * 本地运行时不需要API-Key，此处返回null表示不发送 Authorization 头；
      * 若运行时确实要求非空头（部分实现会校验），可填入任意占位值（如 local）。
      */
     private String authToken() {
@@ -452,7 +452,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
      * 本地端点也走**原生 function calling**。
      *
      * 这里的结论是实测出来的，别再改回"本地走文本"：
-     *   1. 随盒子的 llama-server 会按模型的 chat 模板解析工具调用 —— 带上 tools 时，
+     *   1. 随软件拉起的 llama-server 会按模型的 chat 模板解析工具调用 —— 带上 tools 时，
      *      模型吐的模板原生语法 <tool_call><function=名字>…</function></tool_call>
      *      会被服务端解析成**标准 tool_calls**（流式也正常）；
      *   2. 反过来不下发 tools 时，模型会开始**编造工具**
@@ -655,7 +655,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     /**
      * 判断模型是否支持思考等级
      * 
-     * 盒子本地运行时（GGUF）不提供云端厂商的思考等级参数，统一返回false。
+     * 本地运行时（GGUF）不提供云端厂商的思考等级参数，统一返回false。
      */
     private boolean supportsThinking() {
         return false;

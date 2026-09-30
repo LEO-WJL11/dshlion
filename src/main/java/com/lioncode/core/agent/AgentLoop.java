@@ -164,7 +164,7 @@ public class AgentLoop {
     /**
      * 本轮是否走**原生 function calling**（把 tools 定义随请求下发）。     *
      * 三种取值（设置里可切，默认 auto）：
-     *   auto   → 默认都走原生：云端 OpenAI 兼容 API 和随盒子的 llama-server 都支持。
+     *   auto   → 默认都走原生：云端 OpenAI 兼容 API 和随软件拉起的 llama-server 都支持。
      *            llama-server 会按模型的 chat 模板把原生语法解析成标准 tool_calls；
      *            实测不下发 tools 时模型会开始**编造工具**，所以本地也必须下发。
      *   native → 强制下发 tools
@@ -186,7 +186,7 @@ public class AgentLoop {
             return !rejected;
         }
         // ---- AUTO ----
-        // 【本地盒子运行时走文本通道】—— 2026-09-29 抓包实测的结论，别凭印象改。
+        // 【本地模型运行时走文本通道】—— 2026-09-29 抓包实测的结论，别凭印象改。
         //
         // 原生通道在"一次只调一个工具"时没问题，但要让模型批量省时间（一次给 2-3 个调用），
         // 本机 llama-server 会把模型吐的多个 <tool_call> 块**揉成一个调用**，把后续块的 XML
@@ -857,7 +857,7 @@ public class AgentLoop {
             .ifPresent(ws -> com.lioncode.core.workspace.WorkspaceContext.set(ws.path()));
         com.lioncode.core.session.SessionContext.set(sessionId);
         try {
-            // 【派发前先把参数类型转对】文本通道（本地盒子默认）下所有参数都是字符串，
+            // 【派发前先把参数类型转对】文本通道（本地模式默认）下所有参数都是字符串，
             // 而工具里写的是 ((Number) args.get("lines")).intValue() → ClassCastException，
             // 实测 glob_files / head_tail_file / directory_tree / modify_file 全中招。
             //
@@ -1285,7 +1285,7 @@ public class AgentLoop {
     /**
      * 按工具自己声明的 JSON Schema，把参数值转成正确的类型。
      *
-     * <p>【为什么非要在这里做】模型给的是"文本"：文本通道（本地盒子默认）下
+     * <p>【为什么非要在这里做】模型给的是"文本"：文本通道（本地模式默认）下
      * {@code <parameter=lines>5</parameter>} 解析出来是字符串 "5"，
      * 原生通道也可能给 {@code "5"}。而工具里的写法是
      * {@code ((Number) arguments.get("lines")).intValue()} —— 直接

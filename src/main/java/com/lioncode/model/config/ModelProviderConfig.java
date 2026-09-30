@@ -6,7 +6,7 @@ import java.util.Map;
 /**
  * 模型提供商配置
  * 
- * 本产品为硬件一体机（模型盒子），模型运行时随盒子交付并绑定回环地址，
+ * 本产品的模型运行时就用本机自带的本地运行时，绑定回环地址，
  * 因此内置模板列表刻意只保留一个本地提供商，不再包含任何云端服务商。
  * 字段结构（含Token-Plan相关字段）为兼容既有调用方而保持不变。
  */
@@ -26,20 +26,20 @@ public record ModelProviderConfig(
     /** 协议类型 */
     String protocolType
 ) {
-    /** 盒子本地模型运行时端口（与 application.yml 的 lionbox.runtime.port 保持一致） */
+    /** 本地模型运行时端口（与 application.yml 的 lionbox.runtime.port 保持一致） */
     public static final int LOCAL_RUNTIME_PORT = 8788;
 
-    /** 盒子本地模型运行时主机（仅回环地址） */
+    /** 本地模型运行时主机（仅回环地址） */
     public static final String LOCAL_RUNTIME_HOST = "127.0.0.1";
 
-    /** 盒子内置模型名称 */
+    /** 内置本地模型名称 */
     public static final String LOCAL_MODEL_NAME = "lion-models1";
 
-    /** 盒子内置模型文件（随盒子交付的GGUF权重） */
+    /** 内置模型文件（软件自带的GGUF权重） */
     public static final String LOCAL_MODEL_FILE = "lion-merged-Q8_0.gguf";
 
     /**
-     * 盒子本地运行时默认Base URL（端口与 application.yml 的 lionbox.runtime.port 一致）
+     * 本地运行时默认Base URL（端口与 application.yml 的 lionbox.runtime.port 一致）
      */
     public static String localBaseUrl() {
         return "http://" + LOCAL_RUNTIME_HOST + ":" + LOCAL_RUNTIME_PORT + "/v1";
@@ -48,8 +48,8 @@ public record ModelProviderConfig(
     /**
      * 内置提供商模板列表
      * 
-     * 刻意只保留一项：随盒子交付的本地模型运行时。
-     * 本产品为硬件一体机，模型在盒子内以GGUF形式本地推理，通过回环地址的
+     * 刻意只保留一项：软件自带的本地模型运行时。
+     * 模型在本机以 GGUF 形式本地推理，通过回环地址的
      * OpenAI兼容端点提供服务，不需要API-Key，也不允许连接任何云端服务商。
      * 因此该列表不提供、也不再新增任何云端厂商模板。
      */

@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 持久化用户级配置：模型提供商（baseUrl）、适配器配置、
  * 当前激活的适配器、选中的模型与思考等级。
  * 
- * 盒子出厂即默认指向本地模型运行时，无需任何API-Key，也不连接云端服务商。
+ * 出厂即默认指向本地模型运行时，无需任何API-Key，也不连接云端服务商。
  * 
  * 存储位置: {user.home}/.lioncode/app-config.json
  * 每次修改立即落盘，应用重启后自动加载。
@@ -37,7 +37,7 @@ public class AppConfigStore {
     @Value("${lionbox.runtime.base-url:http://127.0.0.1:8788/v1}")
     private String localBaseUrl;
 
-    /** 盒子出厂默认模型 */
+    /** 出厂默认模型 */
     private static final String LOCAL_PROVIDER_ID = "lionbox-local";
     private static final String CUSTOM_PROVIDER_ID = "lionbox-custom";
     private static final String LOCAL_MODEL = "lion-models1";
@@ -48,7 +48,7 @@ public class AppConfigStore {
      */
     private static final String LEGACY_LOCAL_MODEL = "MiMo-V2.6-Distill-Qwen-9B";
 
-    /** 运行模式：用随盒子交付的本地模型 */
+    /** 运行模式：用软件自带的本地模型 */
     public static final String MODE_LOCAL = "local";
     /** 运行模式：用用户自己填的 OpenAI 兼容 API */
     public static final String MODE_CUSTOM = "custom";
@@ -146,7 +146,7 @@ public class AppConfigStore {
      * 两条规则，别搞混：
      *
      * 【本地模式 local】
-     *   端点与模型固定指向随盒子交付的运行时，密钥留空。
+     *   端点与模型固定指向软件自带的运行时，密钥留空。
      *   应用启动时**不加载模型**，等第一条消息由 LocalModelRuntime 惰性拉起。
      *
      * 【自定义模式 custom】
@@ -250,7 +250,7 @@ public class AppConfigStore {
      * 真正会漏下来的是 providers 实例里登记的可选模型列表——界面读的就是它，
      * 所以老配置升级后下拉框里还会显示底座名字。
      *
-     * 只动盒子自己那两个实例（本地实例、或端点仍是本地端点的实例）：
+     * 只动自带的那两个实例（本地实例、或端点仍是本地端点的实例）：
      * 自定义模式下用户完全可能自己就填了这个模型名，那是他的配置，不能改。
      */
     @SuppressWarnings("unchecked")
@@ -421,7 +421,7 @@ public class AppConfigStore {
     }
 
     /**
-     * 判断给定Base URL是否属于盒子本地端点
+     * 判断给定Base URL是否属于本地端点
      */
     private boolean isKnownLocalBaseUrl(Object value) {
         if (!(value instanceof String s) || s.isBlank()) {
@@ -500,7 +500,7 @@ public class AppConfigStore {
         return TOOLCALL_AUTO;
     }
 
-    /** 当前是否在用随盒子交付的本地模型（本地模式下端点是我们自己拉起的 llama-server） */
+    /** 当前是否在用软件自带的本地模型（本地模式下端点是我们自己拉起的 llama-server） */
     public boolean isLocalMode() {
         return MODE_LOCAL.equals(str(config.get("providerMode")).trim().toLowerCase());
     }

@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 盒子本地模型运行时（llama.cpp）的惰性加载与进程管理。
+ * 本地模型运行时（llama.cpp）的惰性加载与进程管理。
  *
  * 为什么需要它
  * ------------------------------------------------------------------

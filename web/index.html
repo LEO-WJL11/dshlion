@@ -203,7 +203,7 @@
                 <div class="features">
                     <div class="feature"><div class="fi">🔧</div><div class="ft">51个插件</div><div class="fd">4 Skill + 47 Tool</div></div>
                     <div class="feature"><div class="fi">⚡</div><div class="ft">流式执行</div><div class="fd">识别即调度</div></div>
-                    <div class="feature"><div class="fi">📦</div><div class="ft">盒子本地推理</div><div class="fd">无需联网 · 无需API Key</div></div>
+                    <div class="feature"><div class="fi">📦</div><div class="ft">本地推理</div><div class="fd">无需联网 · 无需API Key</div></div>
                     <div class="feature"><div class="fi">📝</div><div class="ft">事件溯源</div><div class="fd">完整记录回放</div></div>
                 </div>
             </div>
@@ -2453,7 +2453,7 @@ var App = {
         }).catch(function() { alert('保存失败'); });
     },
 
-    // 盒子版：不再有“选择服务商 / 填 API Key / Token-Plan”流程。
+    // 本地版：不再有“选择服务商 / 填 API Key / Token-Plan”流程。
     // 模型来源固定为 LionBox 本地端点，检测入口见 checkBoxModel()。
 
     fillModels: function(models) {
@@ -2472,7 +2472,7 @@ var App = {
         }
     },
 
-    // 盒子只内置一个模型；保留该函数仅为兜底，不再含任何云厂商列表
+    // 只内置一个模型；保留该函数仅为兜底，不再含任何云厂商列表
     fillDefaultModels: function(providerId) {
         this.fillModels([{modelId:'lion-models1', modelName:'lion-models1'}]);
     },
@@ -2483,7 +2483,7 @@ var App = {
         var tl = document.getElementById('thinkingLevel');
         if (!modelId) { tl.disabled = true; tl.innerHTML = '<option>选择模型后加载</option>'; return; }
 
-        // 盒子本地模型不支持思考等级（GGUF 运行时无 reasoning effort 参数）
+        // 本地模型不支持思考等级（GGUF 运行时无 reasoning effort 参数）
         var levels = [];
         var lower = modelId.toLowerCase();
 
