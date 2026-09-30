@@ -59,6 +59,7 @@ public class ShellStopTool extends AbstractToolPlugin {
                         : "（当前在跑的后台进程: " + String.join(", ", running) + "）"));
             }
             process.destroyForcibly();
+            ShellBackgroundTool.processTails.remove(pid);   // 顺带清掉它的输出尾巴
             return success("进程已停止: " + pid);
         } catch (Exception e) {
             return error("停止进程失败: " + e.getMessage());

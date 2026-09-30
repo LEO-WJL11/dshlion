@@ -411,6 +411,75 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
         }
     }
 
+    /** 把文件名切成词（按 . _ - 空格 切），用于"相近名字"比对。 */
+    private static java.util.List<String> tokens(String name) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String t : name.split("[._\\-\\s]+")) {
+            if (!t.isBlank()) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 文件不存在时，给一句"同目录下有相近的名字"。
+     *
+     * <p>实测：模型把 {@code test.txt} 记成 {@code test_file.txt}、把 {@code note.md} 写成
+     * {@code notes.md}，原来只回一句"文件不存在"，它就再试一次（还是错）。给个候选名字，
+     * 下一轮基本一次就对了。
+     */
+    protected String similarPathHint(String rawPath) {
+        try {
+            java.nio.file.Path p = java.nio.file.Path.of(rawPath);
+            java.nio.file.Path dir = p.getParent();
+            if (dir == null) {
+                dir = java.nio.file.Path.of(currentWorkspace() == null ? "." : currentWorkspace());
+            }
+            if (!java.nio.file.Files.isDirectory(dir)) {
+                return "";
+            }
+            String want = p.getFileName().toString().toLowerCase();
+            java.util.List<String> wantTokens = tokens(want);
+            java.util.List<String> near = new java.util.ArrayList<>();
+            try (var list = java.nio.file.Files.list(dir)) {
+                for (java.nio.file.Path x : list.toList()) {
+                    String n = x.getFileName().toString().toLowerCase();
+                    if (n.equals(want)) {
+                        continue;
+                    }
+                    boolean hit = n.contains(want) || want.contains(n);
+                    if (!hit) {
+                        // 【实测】模型把 note_file.txt 记成 nope_note.txt、把 test.txt 写成
+                        // test_file.txt —— 去掉下划线/横线后再比一次、再按"共同词"比一次，
+                        // 这类名字就能认出来（只比下划线那一种太死，等于没有）。
+                        String flatN = n.replace("_", "").replace("-", "");
+                        String flatW = want.replace("_", "").replace("-", "");
+                        hit = flatN.contains(flatW) || flatW.contains(flatN);
+                    }
+                    if (!hit) {
+                        for (String t : wantTokens) {
+                            if (t.length() >= 3 && tokens(n).contains(t)) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hit) {
+                        near.add(x.getFileName().toString());
+                    }
+                }
+            }
+            if (near.isEmpty()) {
+                return "";
+            }
+            return "（同目录下有这些相近的名字，看看是不是其中之一: "
+                + String.join("、", near.subList(0, Math.min(5, near.size()))) + "）";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     /**
      * 解析路径参数：相对路径基于当前会话绑定的工作区根目录
      */

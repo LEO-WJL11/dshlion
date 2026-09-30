@@ -61,7 +61,10 @@ public class FileDeleteTool extends AbstractToolPlugin {
             }
 
             if (!Files.exists(target)) {
-                return error("路径不存在: " + path);
+                // 【实测】模型清理自己建的东西时会重复删同一个路径（"确保它没了"），
+                // 第二次必然 ❌"路径不存在"。删除的语义本来就是"删完它不在"，
+                // 所以不存在 = 已经满足，直接当成功回，别让它白跑一轮。
+                return success("路径本来就不存在（无需删除）: " + path);
             }
 
             if (Files.isDirectory(target)) {

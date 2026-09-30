@@ -38,7 +38,20 @@ public class FileLineCountTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             Path file = Path.of(path);
             if (Files.isDirectory(file)) {
-                return error("这是目录，不是文件: " + path + "（先 list_directory/glob_files 找具体文件）");
+                // 同 word_count：模型要的是"这个目录里一共多少行"，那就去数
+                long total = 0, files = 0;
+                try (var walk = Files.walk(file)) {
+                    for (Path p : walk.filter(Files::isRegularFile).toList()) {
+                        try {
+                            total += readTextLines(p).size();
+                            files++;
+                        } catch (Exception notText) {
+                            // 二进制文件跳过
+                        }
+                    }
+                }
+                return success("这是目录，已按**目录累计**统计: " + path
+                    + "\n文本文件数: " + files + "\n总行数: " + total);
             }
             if (!Files.exists(file)) {
                 return error("文件不存在: " + path);

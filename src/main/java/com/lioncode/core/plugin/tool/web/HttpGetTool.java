@@ -16,8 +16,13 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class HttpGetTool extends AbstractToolPlugin {
 
+    // 带浏览器 UA：不少站点对无 UA 的请求直接不响应（连接挂到超时）
+    private static final String UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            + "Chrome/124.0 Safari/537.36";
+
     private final OkHttpClient client = new OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).build();
+        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build();
 
     @Override
     public String getId() { return "tool.http.get"; }
@@ -42,7 +47,8 @@ public class HttpGetTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String url = getRequiredStringArg(arguments, "url");
-            Request request = new Request.Builder().url(url).get().build();
+            Request request = new Request.Builder().url(url)
+                .header("User-Agent", UA).get().build();
             try (Response response = client.newCall(request).execute()) {
                 String body = response.body() != null ? response.body().string() : "";
                 return success("HTTP " + response.code() + "\n" + body);

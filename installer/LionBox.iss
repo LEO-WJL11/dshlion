@@ -78,7 +78,16 @@
 ; 1.4.1：**不再做盒子（硬件一体机）了** —— 把代码/文档/界面里"盒子/硬件一体机/随盒子交付"
 ;         这类说法全改成"本地模型运行时"（**只动文案，判断逻辑与端点限制一行没改**）；
 ;         硬件板的设计文档和调研资料已从项目里删掉
-#define AppVersion     "1.4.1"
+; 1.4.2：**修用户实测报错的工具** —— 能办成的事不再回 ❌：
+;         word_count / line_count 给目录 → 按目录累计统计；
+;         read_file / head_tail_file 给目录 → 列出目录内容；
+;         delete_file 删已经不存在的路径、git_branch 删不存在的分支/重复建同名分支 → 幂等成功；
+;         找不到文件时给出"同目录下相近的名字"；
+;         run_background 改用 PowerShell（跟 execute_command 一致）、workdir 走工作区解析、
+;         并排空子进程输出（原来输出一多子进程被管道堵死）；
+;         fetch_url / http_get 带上 User-Agent、超时放宽、失败重试（fetch_url 超时的真因就是没 UA）；
+;         execute_command 退出码非 0 但**有输出**时把话说清楚，git 的 128 给专门提示
+#define AppVersion     "1.4.2"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

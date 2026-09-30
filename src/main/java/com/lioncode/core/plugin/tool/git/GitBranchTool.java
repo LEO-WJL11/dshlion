@@ -32,6 +32,25 @@ public class GitBranchTool extends AbstractToolPlugin {
         ), "required", new String[]{"path", "action"});
     }
 
+    /** 本地有没有这个分支（`git branch --list <名字>` 输出非空就是有）。 */
+    private boolean branchExists(String dir, String branch) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(gitExecutable(), "branch", "--list", branch);
+            pb.directory(new File(dir));
+            pb.redirectErrorStream(true);
+            gitEnv(pb);
+            Process p = pb.start();
+            if (!p.waitFor(15, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return false;
+            }
+            String out = new String(p.getInputStream().readAllBytes()).trim();
+            return !out.isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
         try {
@@ -74,6 +93,15 @@ public class GitBranchTool extends AbstractToolPlugin {
                     }
                     return error("创建分支失败（退出码 " + cp.exitValue() + "）:\n" + out);
                 }
+            }
+
+            // 【实测】模型"把工具试一遍"时会重复建同名分支、或删一个它刚删过的分支，
+            // 原来两次都 ❌。这两件事的结果本来就已经是它想要的，直接当成功回。
+            if (action.equals("create") && branchExists(path, branch)) {
+                return success("分支已存在，无需重复创建: " + branch);
+            }
+            if (action.equals("delete") && !branchExists(path, branch)) {
+                return success("分支本来就不存在（无需删除）: " + branch);
             }
 
             ProcessBuilder pb;

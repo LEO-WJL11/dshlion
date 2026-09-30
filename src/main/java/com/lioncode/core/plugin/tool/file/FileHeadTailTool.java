@@ -38,6 +38,9 @@ public class FileHeadTailTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
+            if (!Files.exists(Path.of(path))) {
+                return error("文件不存在: " + path + similarPathHint(path));
+            }
             // mode 缺省当 head：实测模型经常漏这个参数，直接报错会让它连错好几轮
             String mode = getStringArg(arguments, "mode", "head");
             if (mode == null || mode.isBlank()) {
@@ -45,6 +48,22 @@ public class FileHeadTailTool extends AbstractToolPlugin {
             }
             int lines = getIntArg(arguments, "lines", 10);
             
+            if (Files.isDirectory(Path.of(path))) {
+                // 目录没有"头几行"这回事，就把目录内容当前几行给它（模型通常正是想看这个）
+                List<String> entries = new java.util.ArrayList<>();
+                try (var list = Files.list(Path.of(path))) {
+                    list.sorted().limit(Math.max(1, lines)).forEach(p ->
+                        entries.add((Files.isDirectory(p) ? "[DIR]  " : "[FILE] ") + p.getFileName()));
+                }
+                if (entries.isEmpty()) {
+                    entries.add("（空目录）");
+                }
+                StringBuilder dirOut = new StringBuilder("这是目录，不是文件；列的是它的条目:\n");
+                for (int i = 0; i < entries.size(); i++) {
+                    dirOut.append(i + 1).append(": ").append(entries.get(i)).append('\n');
+                }
+                return success(dirOut.toString());
+            }
             List<String> allLines = readTextLines(Path.of(path));
             List<String> result;
             

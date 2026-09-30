@@ -60,10 +60,27 @@ public class FileReadTool extends AbstractToolPlugin {
 
             Path filePath = Path.of(path);
             if (!Files.exists(filePath)) {
-                return error("文件不存在: " + path);
+                return error("文件不存在: " + path + similarPathHint(path));
+            }
+            if (Files.isDirectory(filePath)) {
+                // 【实测】模型常把目录当文件读，原来回 ❌"不是普通文件"，它得再跑一轮。
+                // 直接把目录列出来，等于这一轮就把事办了。
+                StringBuilder dir = new StringBuilder();
+                dir.append("这是目录，不是文件；下面是它的内容: ").append(path).append("\n");
+                try (var list = Files.list(filePath)) {
+                    var names = list.sorted().limit(200).toList();
+                    for (Path p : names) {
+                        dir.append(Files.isDirectory(p) ? "[DIR]  " : "[FILE] ").append(p.getFileName()).append('\n');
+                    }
+                    if (names.isEmpty()) {
+                        dir.append("（空目录）\n");
+                    }
+                }
+                dir.append("（要看某个文件就 read_file 它的完整路径；看整棵树用 directory_tree）");
+                return success(dir.toString());
             }
             if (!Files.isRegularFile(filePath)) {
-                return error("不是普通文件: " + path);
+                return error("不是普通文件: " + path + "（可能是设备/管道文件）");
             }
 
             var lines = readTextLines(filePath);

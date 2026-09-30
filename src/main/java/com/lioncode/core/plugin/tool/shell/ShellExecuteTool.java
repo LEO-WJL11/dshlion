@@ -173,7 +173,17 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             if (r.ok() && (code == null || code == 0)) {
                 return success(sb.toString());
             }
-            return error("命令执行失败（退出码: " + (code != null ? code : "非0") + "）\n" + sb);
+            // 【实测】退出码非 0 但明明有输出时（例如 git 在非仓库目录报 128、grep 没匹配到），
+            // 一律写成"执行失败"会让模型以为命令根本没跑。这里把"有没有输出"说清楚，
+            // 常见的 128 / 1 再补一句提示，它下一轮就能改对。
+            StringBuilder fail = new StringBuilder();
+            fail.append("命令以退出码 ").append(code != null ? code : "非0").append(" 结束");
+            fail.append(r.output().isEmpty() ? "（没有任何输出）" : "（**有输出**，见下）");
+            if (code != null && code == 128) {
+                fail.append("；128 是 git 的 fatal：多半是当前目录不是 git 仓库（先 git_init，或用 path 指定仓库目录）");
+            }
+            fail.append('\n').append(sb);
+            return error(fail.toString());
         } catch (Exception e) {
             return error("命令执行异常: " + e.getMessage());
         }
