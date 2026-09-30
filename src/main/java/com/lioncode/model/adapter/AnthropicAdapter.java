@@ -45,8 +45,8 @@ public class AnthropicAdapter implements ModelAdapter {
     private static final String ANTHROPIC_VERSION = "2023-06-01";
 
     /** 本地场景不预设任何外部端点：必须显式配置才可用 */
-    private String baseUrl = "";
-    private String apiKey = "";
+    private volatile String baseUrl = "";
+    private volatile String apiKey = "";
     private final OkHttpClient httpClient;
 
     public AnthropicAdapter() {
@@ -69,13 +69,28 @@ public class AnthropicAdapter implements ModelAdapter {
 
     @Override
     public void updateConfig(Map<String, Object> config) {
+        if (config == null) {
+            return;
+        }
+        // 不强转 String：配置是用户可写的 JSON，传数字/对象进来会抛 ClassCastException
         if (config.containsKey("baseUrl")) {
-            this.baseUrl = (String) config.get("baseUrl");
+            this.baseUrl = safeStr(config.get("baseUrl"), this.baseUrl);
         }
         if (config.containsKey("apiKey")) {
-            this.apiKey = (String) config.get("apiKey");
+            this.apiKey = safeStr(config.get("apiKey"), this.apiKey);
         }
         log.info("Anthropic适配器配置已更新: baseUrl={}", baseUrl);
+    }
+
+    /** 宽松转字符串：null → 用旧值；其它类型一律 String.valueOf（不抛 CCE） */
+    private static String safeStr(Object value, String fallback) {
+        if (value == null) {
+            return fallback == null ? "" : fallback;
+        }
+        if (value instanceof String s) {
+            return s;
+        }
+        return String.valueOf(value);
     }
 
     @Override
@@ -106,6 +121,12 @@ public class AnthropicAdapter implements ModelAdapter {
                 String responseBody = response.body() != null ? response.body().string() : "";
                 return parseResponse(responseBody);
             }
+        } catch (RuntimeException e) {
+            // 【为什么单独 catch RuntimeException】下面的 catch(Exception) 会把上面刚抛出的
+            // "Anthropic调用失败: HTTP 400 - ..." 再包一层，日志和界面变成
+            // "Anthropic调用失败: Anthropic调用失败: HTTP 400 - ..."（重复前缀 + 打一整条堆栈）
+            log.warn("Anthropic接口调用失败: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("Anthropic接口调用失败", e);
             throw new RuntimeException("Anthropic调用失败: " + e.getMessage(), e);
@@ -116,6 +137,10 @@ public class AnthropicAdapter implements ModelAdapter {
     public Flux<ModelChunk> chatStream(List<ChatMessage> messages, String model, ThinkingLevel thinkingLevel,
                                        List<Map<String, Object>> tools) {
         return Flux.create(sink -> {
+            // 同 OpenAI 适配器：订阅者取消时要把 SSE 连接关掉，否则请求会一直跑到底
+            EventSource[] holder = new EventSource[1];
+            sink.onCancel(() -> cancelQuietly(holder[0]));
+            sink.onDispose(() -> cancelQuietly(holder[0]));
             try {
                 ObjectNode request = buildRequest(messages, model, thinkingLevel, true, tools);
                 String jsonBody = mapper.writeValueAsString(request);
@@ -129,7 +154,7 @@ public class AnthropicAdapter implements ModelAdapter {
                     .build();
 
                 EventSource.Factory factory = EventSources.createFactory(httpClient);
-                factory.newEventSource(httpRequest, new EventSourceListener() {
+                holder[0] = factory.newEventSource(httpRequest, new EventSourceListener() {
                     @Override
                     public void onEvent(EventSource eventSource, String id, String type, String data) {
                         try {
@@ -139,15 +164,15 @@ public class AnthropicAdapter implements ModelAdapter {
                             switch (eventType) {
                                 case "content_block_delta" -> {
                                     JsonNode delta = event.get("delta");
-                                    if (delta == null) break;
+                                    if (delta == null || delta.isNull()) break;
                                     int index = event.has("index") ? event.get("index").asInt() : 0;
-                                    if ("text_delta".equals(delta.get("type").asText())) {
-                                        String text = delta.get("text").asText();
+                                    String deltaType = textOf(delta, "type", "");
+                                    if ("text_delta".equals(deltaType)) {
+                                        String text = textOf(delta, "text", "");
                                         sink.next(new ModelChunk(text, List.of(), false, null, null));
-                                    } else if ("input_json_delta".equals(delta.get("type").asText())) {
+                                    } else if ("input_json_delta".equals(deltaType)) {
                                         // 工具调用参数增量：与AgentLoop的累积器按index对接
-                                        String partialJson = delta.has("partial_json") 
-                                            ? delta.get("partial_json").asText() : "";
+                                        String partialJson = textOf(delta, "partial_json", "");
                                         sink.next(new ModelChunk("",
                                             List.of(new ModelChunk.ToolCallDelta(index, null, null, partialJson)),
                                             false, null, null));
@@ -155,10 +180,11 @@ public class AnthropicAdapter implements ModelAdapter {
                                 }
                                 case "content_block_start" -> {
                                     JsonNode block = event.get("content_block");
-                                    if (block != null && "tool_use".equals(block.get("type").asText())) {
+                                    if (block != null && !block.isNull()
+                                            && "tool_use".equals(textOf(block, "type", ""))) {
                                         // 工具调用开始：携带index，供参数增量按index累积
-                                        String toolCallId = block.get("id").asText();
-                                        String toolName = block.get("name").asText();
+                                        String toolCallId = textOf(block, "id", null);
+                                        String toolName = textOf(block, "name", null);
                                         int index = event.has("index") ? event.get("index").asInt() : 0;
                                         sink.next(new ModelChunk("",
                                             List.of(new ModelChunk.ToolCallDelta(index, toolCallId, toolName, null)),
@@ -167,7 +193,8 @@ public class AnthropicAdapter implements ModelAdapter {
                                 }
                                 case "message_delta" -> {
                                     JsonNode delta = event.get("delta");
-                                    if (delta != null && delta.has("stop_reason")) {
+                                    if (delta != null && delta.has("stop_reason")
+                                            && !delta.get("stop_reason").isNull()) {
                                         String stopReason = delta.get("stop_reason").asText();
                                         sink.next(new ModelChunk("", List.of(), true, stopReason, null));
                                         sink.complete();
@@ -202,6 +229,18 @@ public class AnthropicAdapter implements ModelAdapter {
         // 出厂只内置本地模型：此适配器不内置任何云端模型清单，
         // 避免UI或接口出现云端模型选项。
         return List.of();
+    }
+
+    /** 取消 SSE 连接；已经结束的 EventSource cancel() 是无害的空操作 */
+    private static void cancelQuietly(EventSource source) {
+        if (source == null) {
+            return;
+        }
+        try {
+            source.cancel();
+        } catch (Exception e) {
+            log.debug("取消流式请求失败（忽略）: {}", e.getMessage());
+        }
     }
 
     /**
@@ -303,15 +342,22 @@ public class AnthropicAdapter implements ModelAdapter {
         List<ChatMessage.ToolCall> toolCalls = new ArrayList<>();
         
         JsonNode contentBlocks = root.get("content");
-        if (contentBlocks != null) {
+        if (contentBlocks != null && contentBlocks.isArray()) {
             for (JsonNode block : contentBlocks) {
-                String type = block.get("type").asText();
+                // 逐字段判空：少一个 "type"/"text" 就 NPE 会让整次调用失败并触发重试
+                String type = textOf(block, "type", "");
                 if ("text".equals(type)) {
-                    contentBuilder.append(block.get("text").asText());
+                    contentBuilder.append(textOf(block, "text", ""));
                 } else if ("tool_use".equals(type)) {
-                    String id = block.get("id").asText();
-                    String name = block.get("name").asText();
-                    Map<String, Object> input = mapper.convertValue(block.get("input"), Map.class);
+                    String id = textOf(block, "id", null);
+                    String name = textOf(block, "name", null);
+                    if (name == null || name.isBlank()) {
+                        log.warn("Anthropic 返回的 tool_use 缺少 name，已丢弃: id={}", id);
+                        continue;
+                    }
+                    Map<String, Object> input = block.get("input") == null || block.get("input").isNull()
+                        ? Map.of()
+                        : mapper.convertValue(block.get("input"), Map.class);
                     toolCalls.add(new ChatMessage.ToolCall(id, name, input));
                 }
             }
@@ -319,20 +365,49 @@ public class AnthropicAdapter implements ModelAdapter {
 
         String content = contentBuilder.toString();
 
-        String stopReason = root.has("stop_reason") ? root.get("stop_reason").asText() : null;
+        String stopReason = textOf(root, "stop_reason", null);
         boolean finished = "end_turn".equals(stopReason) || "tool_use".equals(stopReason);
 
         // Token使用
+        // 字段缺失时不能直接 asInt()：usage 为 JSON null 或只有部分字段时
+        // NullNode.get() 返回 null → NPE，会把一次成功的回答整段丢掉
         ModelResponse.TokenUsage usage = null;
-        if (root.has("usage")) {
-            JsonNode usageNode = root.get("usage");
-            usage = new ModelResponse.TokenUsage(
-                usageNode.get("input_tokens").asInt(),
-                usageNode.get("output_tokens").asInt(),
-                usageNode.get("input_tokens").asInt() + usageNode.get("output_tokens").asInt()
-            );
+        JsonNode usageNode = root.get("usage");
+        if (usageNode != null && usageNode.isObject()) {
+            Integer in = intOf(usageNode, "input_tokens");
+            Integer out = intOf(usageNode, "output_tokens");
+            if (in != null || out != null) {
+                int i = in == null ? 0 : in;
+                int o = out == null ? 0 : out;
+                usage = new ModelResponse.TokenUsage(i, o, i + o);
+            }
         }
 
         return new ModelResponse(content, toolCalls, finished, usage, stopReason, null);
+    }
+
+    /** 安全取字符串字段（缺失/JSON null 一律返回默认值，绝不返回字符串 "null"） */
+    private static String textOf(JsonNode node, String field, String defaultValue) {
+        if (node == null) {
+            return defaultValue;
+        }
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return defaultValue;
+        }
+        String s = v.asText();
+        return s == null ? defaultValue : s;
+    }
+
+    /** 安全取整数字段（缺失/null/非数字一律返回 null，绝不抛异常） */
+    private static Integer intOf(JsonNode node, String field) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull() || !v.canConvertToInt()) {
+            return null;
+        }
+        return v.asInt();
     }
 }

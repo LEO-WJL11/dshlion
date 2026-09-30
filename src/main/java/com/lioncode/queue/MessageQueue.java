@@ -31,16 +31,39 @@ public class MessageQueue {
     private final AtomicLong sequence = new AtomicLong(0);
 
     /**
+     * 单会话队列容量上限。
+     *
+     * <p>application.yml 里一直写着 {@code lion.queue.capacity: 1000}，
+     * 但**没有任何代码读过它**：PriorityBlockingQueue 是"初始容量 64、无上限"，
+     * 客户端（或脚本）循环 POST /api/chat 就能把消息无限堆在堆里直到 OOM。
+     * 现在真正把它接上：达到上限时拒绝普通消息（返回一个已失败的 future），
+     * Steer（用户插队指令）不受限制，因为它本来就是用来"救场"的。
+     */
+    @org.springframework.beans.factory.annotation.Value("${lion.queue.capacity:1000}")
+    private int capacity = 1000;
+
+    /**
      * 提交消息（普通FIFO）
      * 
      * @return 携带Future的队列消息，处理完成后future完成
      */
     public QueuedMessage submit(String sessionId, String content, int priority, boolean isSteer,
                                 String model, String thinkingLevel) {
+        BlockingQueue<QueuedMessage> queue = queueOf(sessionId);
+        // 容量保护：只拦普通消息，Steer 放行
+        if (!isSteer && capacity > 0 && queue.size() >= capacity) {
+            log.warn("会话 {} 的待处理消息已达上限 {}，拒绝本次入队", sessionId, capacity);
+            QueuedMessage rejected = new QueuedMessage(
+                "msg_" + sequence.incrementAndGet(), sessionId, content,
+                priority, isSteer, model, thinkingLevel, new CompletableFuture<>());
+            rejected.future().completeExceptionally(new IllegalStateException(
+                "会话待处理消息过多（上限 " + capacity + " 条），请等当前任务跑完再发"));
+            return rejected;
+        }
         QueuedMessage message = new QueuedMessage(
             "msg_" + sequence.incrementAndGet(), sessionId, content,
             priority, isSteer, model, thinkingLevel, new CompletableFuture<>());
-        queueOf(sessionId).offer(message);
+        queue.offer(message);
         log.debug("消息入队: {} (会话: {}, steer: {})", message.id(), sessionId, isSteer);
         return message;
     }

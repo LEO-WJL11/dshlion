@@ -75,9 +75,11 @@ public class PersistentShell {
      * @param cwd       执行完之后终端所在目录
      * @param timedOut  是否超时（此时 shell 已被重启）
      * @param restarted 是否重启过 shell（超时/被 exit 杀掉）
+     * @param truncated 输出是否因为超过上限被截断（上限来自"终端插件"的设置）
      */
     public record RunResult(String output, Integer exitCode, boolean ok, String cwd,
-                            boolean timedOut, boolean restarted, String errorText) {
+                            boolean timedOut, boolean restarted, String errorText,
+                            boolean truncated) {
     }
 
     /** 会话空闲多久之后回收（毫秒）；10 分钟没命令就把进程关掉，别白占内存 */
@@ -92,6 +94,23 @@ public class PersistentShell {
      * @param timeoutSec 超时秒数
      */
     public RunResult run(String key, String command, String workdir, int timeoutSec) {
+        return run(key, command, workdir, timeoutSec, 0);
+    }
+
+    /**
+     * 同上，但限制最多带回多少字节输出。
+     *
+     * <p>【为什么加这个重载而不是改老方法】老的 4 参签名别的地方还在用（测试、诊断脚本），
+     * 改签名会连带改一堆无关代码。0 = 不限制，也就是老行为。</p>
+     *
+     * <p>截断在**读取侧**做：不是等攒完再切。一条 {@code type huge.log} 能产出几十兆，
+     * 先全读进内存再截断，等于内存被白吃一遍 —— 而且这个软件是跟着本地模型跑的，
+     * 机器本来就不宽裕。</p>
+     *
+     * @param maxOutputBytes 最多带回多少字节（&lt;=0 表示不限制）
+     */
+    public RunResult run(String key, String command, String workdir, int timeoutSec,
+                         int maxOutputBytes) {
         String sessionKey = (key == null || key.isBlank()) ? "default" : key;
         int timeout = timeoutSec <= 0 ? 300 : timeoutSec;
         Session session;
@@ -99,14 +118,20 @@ public class PersistentShell {
             session = acquire(sessionKey);
         } catch (Exception e) {
             return new RunResult("", null, false, null, false, false,
-                "无法启动常驻终端: " + e.getMessage());
+                "无法启动常驻终端: " + e.getMessage(), false);
         }
-        return exec(session, sessionKey, command, workdir, timeout);
+        return exec(session, sessionKey, command, workdir, timeout, maxOutputBytes);
     }
 
     /** 真正执行：写命令 → 等哨兵 → 收输出。 */
     private RunResult exec(Session session, String sessionKey, String command,
                            String workdir, int timeout) {
+        return exec(session, sessionKey, command, workdir, timeout, 0);
+    }
+
+    /** 真正执行（带输出上限）。 */
+    private RunResult exec(Session session, String sessionKey, String command,
+                           String workdir, int timeout, int maxOutputBytes) {
         String token = MARK + Long.toHexString(System.nanoTime() & 0xffffffffL) + "__";
         String payload = buildPayload(command, workdir, token);
 
@@ -120,10 +145,14 @@ public class PersistentShell {
                 sessions.remove(sessionKey, session);
                 session.destroy();
                 return new RunResult("", null, false, null, false, true,
-                    "终端会话已失效（写入失败），已重启: " + e.getMessage());
+                    "终端会话已失效（写入失败），已重启: " + e.getMessage(), false);
             }
 
             StringBuilder out = new StringBuilder();
+            // 已收下的字节数 / 是否已经截过。超限之后仍然要继续把行**读掉**
+            // （不读的话这个 shell 的输出会一直堆在管道里），只是不再往结果里塞。
+            long collectedBytes = 0;
+            boolean truncated = false;
             long deadline = System.currentTimeMillis() + timeout * 1000L;
             while (true) {
                 long remain = deadline - System.currentTimeMillis();
@@ -133,7 +162,7 @@ public class PersistentShell {
                     session.destroy();
                     return new RunResult(out.toString(), null, false, null, true, true,
                         "命令执行超时（" + timeout + "秒），已强制重启终端"
-                            + "（超时通常是在等输入，例如 pause/read-host/set /p）");
+                            + "（超时通常是在等输入，例如 pause/read-host/set /p）", truncated);
                 }
                 String line;
                 try {
@@ -147,24 +176,39 @@ public class PersistentShell {
                     Thread.currentThread().interrupt();
                     return new RunResult(out.toString(), null, false, null, true, true,
                         "命令被上层中断（等太久了），已强制重启终端；"
-                            + "之前 cd 的目录和变量没了，需要的话重新 cd 一次");
+                            + "之前 cd 的目录和变量没了，需要的话重新 cd 一次", truncated);
                 }
                 if (line == null) {
                     if (!session.process.isAlive()) {
                         sessions.remove(sessionKey, session);
                         return new RunResult(out.toString(), null, false, null, false, true,
-                            "终端进程已退出（命令里可能有 exit）—— 下次调用会自动重开一个终端");
+                            "终端进程已退出（命令里可能有 exit）—— 下次调用会自动重开一个终端",
+                            truncated);
                     }
                     continue;
                 }
                 int idx = line.indexOf(token);
                 if (idx < 0) {
+                    // 普通输出行：按字节记账，超了就不再收（但循环继续，直到看见哨兵）
+                    long lineBytes = line.getBytes(StandardCharsets.UTF_8).length + 1L;
+                    if (maxOutputBytes > 0 && collectedBytes + lineBytes > maxOutputBytes) {
+                        truncated = true;
+                        continue;
+                    }
+                    collectedBytes += lineBytes;
                     out.append(line).append('\n');
                     continue;
                 }
                 // 哨兵可能和最后一行输出挤在同一行（命令用了 -NoNewline），前半截也要留着
                 if (idx > 0) {
-                    out.append(line, 0, idx);
+                    String head = line.substring(0, idx);
+                    long headBytes = head.getBytes(StandardCharsets.UTF_8).length;
+                    if (maxOutputBytes > 0 && collectedBytes + headBytes > maxOutputBytes) {
+                        truncated = true;
+                    } else {
+                        collectedBytes += headBytes;
+                        out.append(head);
+                    }
                 }
                 String tail = line.substring(idx + token.length()).trim();
                 boolean ok = tail.contains("ok=True");
@@ -178,7 +222,7 @@ public class PersistentShell {
                 if (text.startsWith("__LIONBOX_ERR__")) {
                     text = text.substring("__LIONBOX_ERR__".length()).trim();
                 }
-                return new RunResult(text, code, ok, cwd, false, false, null);
+                return new RunResult(text, code, ok, cwd, false, false, null, truncated);
             }
         }
     }

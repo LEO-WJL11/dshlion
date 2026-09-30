@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 本地等待页：只允许自己的内联样式与脚本，其余全部禁止 -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;" />
+  <title>LionBox 启动中</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(1200px 600px at 50% -10%, #1b2230 0%, #0f1115 60%);
+      color: #e8eaed; font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    .card { width: min(560px, 86vw); text-align: center; }
+    h1 { margin: 0 0 4px; font-size: 30px; letter-spacing: 2px; font-weight: 600; }
+    .sub { margin: 0 0 28px; color: #9aa4b2; font-size: 12.5px; letter-spacing: 1px; }
+    .spinner {
+      width: 34px; height: 34px; margin: 0 auto 22px;
+      border: 3px solid rgba(255, 255, 255, .14); border-top-color: #f5a623;
+      border-radius: 50%; animation: spin 900ms linear infinite;
+    }
+    .failed .spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status { white-space: pre-wrap; word-break: break-word; color: #cfd6e0; min-height: 3.2em; }
+    .failed .status { color: #ff8a80; }
+    button {
+      margin-top: 22px; padding: 9px 22px; border-radius: 8px; cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, .18); background: #f5a623; color: #1a1206;
+      font-size: 13px; font-weight: 600; display: none;
+    }
+    .failed button { display: inline-block; }
+    footer { position: fixed; bottom: 10px; left: 0; right: 0; text-align: center; color: #5c6672; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <h1>LionBox</h1>
+    <p class="sub">Lion-Code Agent Harness</p>
+    <div class="spinner"></div>
+    <div class="status" id="status">正在初始化 ...</div>
+    <button id="retry" type="button">重试</button>
+  </div>
+  <footer id="versions"></footer>
+
+  <script>
+    (function () {
+      var card = document.getElementById('card');
+      var statusEl = document.getElementById('status');
+      var retryBtn = document.getElementById('retry');
+
+      if (!window.lionbox) {
+        statusEl.textContent = 'preload 未加载：请检查 contextIsolation / preload 配置。';
+        card.classList.add('failed');
+        return;
+      }
+
+      window.lionbox.onStatus(function (payload) {
+        if (!payload) return;
+        if (payload.phase === 'failed') card.classList.add('failed');
+        else card.classList.remove('failed');
+        if (payload.message) statusEl.textContent = payload.message;
+      });
+
+      retryBtn.addEventListener('click', function () {
+        card.classList.remove('failed');
+        statusEl.textContent = '正在重试 ...';
+        window.lionbox.retry();
+      });
+
+      var v = window.lionbox.versions || {};
+      document.getElementById('versions').textContent =
+        'Electron ' + (v.electron || '?') + ' · Chromium ' + (v.chrome || '?') + ' · Node ' + (v.node || '?');
+    })();
+  </script>
+</body>
+</html>

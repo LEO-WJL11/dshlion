@@ -224,9 +224,15 @@ public class AgentLoop {
         log.info("=== Agent主循环开始 === 会话: {}, 模式: {}, 模型: {}", 
             sessionId, mode.getCode(), model);
 
+        // 0. 插件扩展点：用户消息改写（@ 文件 / @ 历史对话 展开成真实上下文）。
+        //    事件里记的是**用户原话**（界面上要显示用户输入的样子，展开后的几 KB 文件内容
+        //    塞进事件流会把界面刷爆），对话历史里存的是**展开后**的内容（模型要看到上下文）。
+        String rawUserMessage = userMessage;
+        userMessage = com.lioncode.core.agent.spi.AgentSpi.applyTransforms(sessionId, userMessage);
+
         // 1. 记录用户消息事件
         eventStore.recordEvent(sessionId, LionEvent.EventType.USER_MESSAGE,
-            Map.of("content", userMessage), "用户消息: " + truncate(userMessage, 100));
+            Map.of("content", rawUserMessage), "用户消息: " + truncate(rawUserMessage, 100));
 
         // 2. 保存用户消息到对话历史
         conversationHistory.addMessage(ConversationMessage.user(sessionId, userMessage));
@@ -241,7 +247,7 @@ public class AgentLoop {
 
         // 3.5 构建工具定义列表（仅原生 function calling 模式下随请求下发）
         boolean nativeTools = useNativeTools();
-        List<Map<String, Object>> toolDefinitions = nativeTools ? buildToolDefinitions(mode) : List.of();
+        List<Map<String, Object>> toolDefinitions = nativeTools ? buildToolDefinitions(mode, sessionId) : List.of();
         // 注意别打印 toolDefinitions.size()：文本模式下这一坨按设计就是空的（不下发 tools），
         // 那样日志会写成"可用工具数量: 0"，看起来像工具全丢了（实际提示词里有 54 个）。
         log.info("本轮可用工具 {} 个（随请求下发 {} 个；工具调用方式: {}）",
@@ -257,6 +263,23 @@ public class AgentLoop {
             round++;
             log.info("--- 工具调用轮次 {} ---", round);
 
+            // 4.4 大循环插件给的轮次上限（默认 0 = 不限，保持"只有用户能停"的老行为）。
+            //     实测真会跑飞：压测里 web_search 那条任务模型连续 12 次 fetch_url 抓
+            //     nodejs.org，没人拦就一直烧下去。用户要"能自己设上限"就给上限，
+            //     不设就维持原样，不替用户做决定。
+            int maxRounds = com.lioncode.core.agent.spi.AgentSpi
+                .loopInt(sessionId, "maxIterations", 0);
+            if (maxRounds > 0 && round > maxRounds) {
+                String capMsg = "⏹ 已达到本轮最大工具调用轮数（" + maxRounds
+                    + "，可在 设置 → 插件 → Agent 大循环 里调整）。";
+                log.info(capMsg + " 会话: {}", sessionId);
+                eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
+                    Map.of("error", "轮次上限", "rounds", round - 1), capMsg);
+                soundNotifier.play(SoundNotifier.Kind.ERROR);
+                conversationHistory.addMessage(ConversationMessage.assistant(sessionId, capMsg));
+                return capMsg;
+            }
+
             // 控制检查：暂停时阻塞等待，停止时中止任务
             try {
                 agentControl.checkControl(sessionId);
@@ -269,6 +292,11 @@ public class AgentLoop {
                 conversationHistory.addMessage(ConversationMessage.assistant(sessionId, stopMsg));
                 return stopMsg;
             }
+
+            // 4.5 上下文预算：历史 + 本轮到目前的工具结果快把模型窗口塞满时，先折叠成摘要。
+            //     不做这件事的后果不是"变慢"，是**整个会话废掉**：请求超长 → 服务端 400 →
+            //     用户看到"模型调用失败"，而且之后每条消息都还是超长。
+            maybeCompressContext(sessionId, messages, model);
 
             // 5. 调用模型
             eventStore.recordEvent(sessionId, LionEvent.EventType.MODEL_THINKING,
@@ -791,10 +819,39 @@ public class AgentLoop {
             Map.of("toolName", toolName, "arguments", toolCall.arguments()),
             "工具调用开始: " + toolName);
 
-        // 查找工具插件
-        Optional<ToolPlugin> toolOpt = pluginRegistry.getToolPlugins().stream()
-            .filter(t -> t.getName().equals(toolName) || t.getId().equals(toolName))
-            .findFirst();
+        // 查找工具插件（用循环而不是 stream：下面 toolName 会被归一化改名，
+        // 一旦重新赋值，方法里所有 lambda 捕获 toolName 的地方都会编译失败）
+        ToolPlugin found = null;
+        for (ToolPlugin t : pluginRegistry.getToolPlugins()) {
+            if (t.getName().equals(toolName) || t.getId().equals(toolName)) {
+                found = t;
+                break;
+            }
+        }
+
+        // 找不到就试一次"工具名归一化"：量化模型很爱写 ls / cat / bash 这类通用叫法，
+        // 直接判"未找到工具"等于白烧一轮推理（本机一轮十几秒）。
+        // 只有精确查找失败时才归一化，绝不会把已经正确的调用改坏；拿不准就照旧报错。
+        if (found == null) {
+            String canonical = ToolNameAliases.resolve(toolName, pluginRegistry.getToolPlugins().stream()
+                .filter(t -> t.isAvailableInMode(mode))
+                .map(ToolPlugin::getName)
+                .filter(n -> n != null && !n.isBlank())
+                .toList());
+            if (canonical != null) {
+                for (ToolPlugin t : pluginRegistry.getToolPlugins()) {
+                    if (t.getName().equals(canonical)) {
+                        found = t;
+                        break;
+                    }
+                }
+                if (found != null) {
+                    log.info("工具名归一化: {} → {}", toolName, canonical);
+                    toolName = canonical;
+                }
+            }
+        }
+        Optional<ToolPlugin> toolOpt = Optional.ofNullable(found);
 
         if (toolOpt.isEmpty()) {
             // 模型偶尔会发明工具名（实测它调用过 delete_directory_placeholder —— 没有这个工具）。
@@ -835,6 +892,21 @@ public class AgentLoop {
             soundNotifier.play(SoundNotifier.Kind.APPROVAL);   // 需要审批：提醒音
             conversationHistory.addMessage(
                 ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + error));
+            return false;
+        }
+
+        // 自动授权审查插件：工具本身没被策略拦，但用户开了"叫另一个模型来审核"，
+        // 这里就真的去问一次模型，它说不放行就不执行。
+        // 【为什么是"回一句错误"而不是静默拒绝】模型要看到拒绝理由才知道该怎么改
+        // （换个更安全的做法 / 先解释清楚），否则它只会一遍遍重试同一个调用。
+        String deny = reviewToolCall(sessionId, tool, toolName, coerceArguments(tool, toolCall.arguments()));
+        if (deny != null) {
+            log.warn("自动授权审查拦截: {} —— {}", toolName, deny);
+            eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
+                Map.of("toolName", toolName, "error", deny, "review", "deny"),
+                "自动授权审查拦截: " + toolName);
+            conversationHistory.addMessage(
+                ConversationMessage.toolResult(sessionId, toolCall.id(), toolName, "错误: " + deny));
             return false;
         }
 
@@ -933,7 +1005,7 @@ public class AgentLoop {
             .orElse(null);
 
         // 系统提示词（含模式专属提示词与适用技能的能力提示词）
-        String systemPrompt = buildSystemPrompt(mode, workspacePath, userMessage, useNativeTools());
+        String systemPrompt = buildSystemPrompt(mode, workspacePath, userMessage, useNativeTools(), sessionId);
         messages.add(ChatMessage.system(systemPrompt));
 
         // 对话历史
@@ -990,6 +1062,14 @@ public class AgentLoop {
      */
     private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage,
                                      boolean nativeTools) {
+        return buildSystemPrompt(mode, workspacePath, userMessage, nativeTools, null);
+    }
+
+    /**
+     * 构建系统提示词（带会话 id 的版本，插件 SPI 要用它按会话过滤工具 / 追加段落）。
+     */
+    private String buildSystemPrompt(AgentMode mode, String workspacePath, String userMessage,
+                                     boolean nativeTools, String sessionId) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是 Lion-Code Agent，通过调用工具真实操作文件和命令来完成任务。\n\n");
 
@@ -1017,7 +1097,7 @@ public class AgentLoop {
         // 实测极简模式跑一轮，它照样去调 web_search / timestamp —— 全是模式外的工具，
         // 用户看到的就是一屏 ❌。所以这里把筛选后的真实工具名直接列出来，不给它猜的空间。
         if (mode == AgentMode.MINIMAL) {
-            List<String> minimalNames = pluginRegistry.getToolsByMode(AgentMode.MINIMAL).stream()
+            List<String> minimalNames = filteredTools(AgentMode.MINIMAL, sessionId).stream()
                 .map(ToolPlugin::getName)
                 .filter(n -> n != null && !n.isBlank())
                 .sorted()
@@ -1027,7 +1107,13 @@ public class AgentLoop {
         }
 
         // 注入适用技能的领域能力提示词（按用户消息匹配）
-        prompt.append(buildSkillPrompt(userMessage));
+        //
+        // 【极简模式不注入】技能正文里经常出现"用 web_search 查一下""用 git_commit 提交"
+        // 这类话，而极简模式只开放文件 + shell 工具 —— 注进去等于**教模型去调不存在的工具**，
+        // 用户看到的就是一屏 ❌（实测套件就是这么抓到的：极简提示词里冒出 web_search）。
+        if (mode != AgentMode.MINIMAL) {
+            prompt.append(buildSkillPrompt(userMessage));
+        }
 
         // 输出纪律：本地模型约 10.8 token/s，一句话能交代的事写成一段就是几十秒。
         // 这几条集中放在一起（散着写模型会挑着遵守），顺序按"影响速度"排。
@@ -1047,7 +1133,7 @@ public class AgentLoop {
         // 白白多烧一千多 token，还可能和模板里的定义打架。
         // 文本通道：清单就是模型能看到的**唯一**工具说明，所以必须列全，
         // 而且要带参数名（1.1.4 里工具第一次调用老失败，就是因为只给了名字和一句描述）。
-        List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
+        List<ToolPlugin> tools = filteredTools(mode, sessionId);
         if (!tools.isEmpty()) {
             if (nativeTools) {
                 prompt.append("## 可用工具\n");
@@ -1059,9 +1145,10 @@ public class AgentLoop {
                 prompt.append("括号里是参数名，带 * 的是必填。**参数名必须照抄**，写错或漏必填都会直接调用失败。\n");
                 for (ToolPlugin tool : tools) {
                     prompt.append("- ").append(tool.getName()).append(toolSignature(tool)).append(": ")
-                          .append(shortDescription(tool.getDescription())).append("\n");
+                          .append(promptDescription(tool)).append("\n");
                 }
                 prompt.append("\n");
+                prompt.append(toolChoiceTable(tools)).append("\n");
 
                 prompt.append("## 工具调用格式\n");
                 prompt.append("首选 JSON：\n");
@@ -1090,7 +1177,165 @@ public class AgentLoop {
         prompt.append("## 必须用工具的情形\n");
         prompt.append("读/写/改/删文件、执行命令、看目录、搜内容、Git 操作、查系统信息 —— 一律调工具，不许只给建议。\n");
 
+        // 插件 SPI：追加段落（技能目录让模型自己挑技能、插件清单、团队智能体说明等）。
+        // 放在最后：这些是"可选能力"，不能挤掉前面的硬性格式约定（模型只看前几屏）。
+        for (String section : com.lioncode.core.agent.spi.AgentSpi
+                .collectSections(sessionId, workspacePath, userMessage)) {
+            prompt.append("\n").append(section).append("\n");
+        }
+
         return prompt.toString();
+    }
+
+    /**
+     * 清单里这条工具该怎么描述。
+     *
+     * <p>【为什么要人工写一份覆盖】原来直接用工具自己的 description 砍到 48 字，
+     * 结果模型**选错工具**：问"config.txt 前 5 行是什么"，它调 list_directory；
+     * 问"统计多少行代码"，它还是调 list_directory —— 因为清单里
+     * {@code head_tail_file: 查看文件头部或尾部N行} 和 {@code line_count: 统计文件行数}
+     * 这两句话没告诉它"用户这么说的时候该用我"。工具自己的描述是给"已经决定要用它的人"看的，
+     * 清单要的是**选择依据**：触发词 + 和谁容易混。
+     *
+     * <p>没写覆盖的工具继续用原描述，不会漏。
+     */
+    private static String promptDescription(ToolPlugin tool) {
+        String hint = TOOL_PROMPT_HINTS.get(tool.getName());
+        return hint != null ? hint : shortDescription(tool.getDescription());
+    }
+
+    /** 高频工具的"选择依据"。写的时候只回答两个问题：用户会怎么说？别跟谁混？ */
+    private static final Map<String, String> TOOL_PROMPT_HINTS = Map.ofEntries(
+        Map.entry("read_file", "读文件内容（已经知道是哪个文件时用它）"),
+        Map.entry("head_tail_file", "看文件开头/结尾 N 行。用户说“前 5 行/最后几行”就用它，**不要用 list_directory、不要用 read_file**"),
+        Map.entry("line_count", "统计行数。用户问“有多少行代码/一共多少行”就用它；path 给目录会递归累计所有文件"),
+        Map.entry("word_count", "统计行数、字数、字节数。用户问“多少字/多大”用它"),
+        Map.entry("list_directory", "列目录下的文件和子目录。只在用户问“有哪些文件/列一下目录”时用"),
+        Map.entry("directory_tree", "画目录树。用户说“目录结构/画给我看/树状”用它"),
+        Map.entry("glob_files", "按名字或后缀找文件。用户说“所有 .java 文件/找找 xyz 文件”用它，pattern 传 **/*.java 这种"),
+        Map.entry("search_in_files", "在**文件内容**里搜文本或正则。用户说“哪里提到了 TODO/搜一下内容”用它"),
+        Map.entry("create_file", "只创建**空**文件。要写内容请用 write_file"),
+        Map.entry("write_file", "新建文件并写入内容（也用于整体覆盖）。用户说“建个文件，写上…”用它"),
+        Map.entry("append_file", "往文件末尾追加内容。用户说“追加一行/加到末尾”用它"),
+        Map.entry("modify_file", "改文件内容：替换/插入/删除行。用 operation 指定动作，替换给 oldText+content，按行改给 startLine/endLine+content"),
+        Map.entry("move_file", "移动或改名。source 是原路径、target 是新路径"),
+        Map.entry("copy_file", "复制文件或目录。source → target"),
+        Map.entry("delete_file", "删除文件或空目录。用户说“删掉/清理”用它"),
+        Map.entry("create_directory", "创建目录（含父目录）"),
+        Map.entry("file_info", "看文件大小、修改时间等信息"),
+        Map.entry("execute_command", "在常驻终端里执行命令。用户说“跑一下/执行/编译/安装/装依赖”用它"),
+        Map.entry("run_background", "后台运行长时间命令（服务、监听、常驻进程）"),
+        Map.entry("stop_background", "停掉后台进程"),
+        Map.entry("system_info", "系统信息（CPU、内存、操作系统）。用户问“什么配置/多少内存”用它"),
+        Map.entry("timestamp", "当前时间。用户问“现在几点/今天几号”用它"),
+        Map.entry("hash", "计算哈希值（md5/sha1/sha256）"),
+        Map.entry("base64", "Base64 编码或解码"),
+        Map.entry("json_format", "JSON 格式化、校验、压缩"),
+        Map.entry("yaml_process", "YAML 格式化或校验"),
+        Map.entry("generate_uuid", "生成 UUID"),
+        Map.entry("get_env", "读环境变量"),
+        Map.entry("dns_lookup", "域名解析成 IP"),
+        Map.entry("fetch_url", "抓取网页正文（给定 URL 时用它）"),
+        Map.entry("http_get", "发 HTTP GET 请求（要接口原始响应时用它）"),
+        Map.entry("http_post", "发 HTTP POST 请求"),
+        Map.entry("web_search", "联网搜索（不知道具体网址、要查资料时用它）"),
+        Map.entry("download_file", "把 URL 上的文件下载到本地"),
+        Map.entry("translate", "翻译文本"),
+        Map.entry("working_directory", "查看或切换当前工作目录"),
+        Map.entry("git_status", "查看 Git 仓库状态"),
+        Map.entry("git_commit", "暂存并提交改动"),
+        Map.entry("git_log", "查看提交历史"),
+        Map.entry("git_diff", "查看改动差异"),
+        Map.entry("git_branch", "查看、创建、切换分支"),
+        Map.entry("git_init", "初始化 Git 仓库"),
+        Map.entry("git_remote", "查看或管理远程仓库"),
+        Map.entry("git_stash", "Git stash 保存/恢复/列出"),
+        Map.entry("git_reset", "撤销暂存或回退提交"),
+        Map.entry("ask_user", "需要用户做选择或补充信息时提问"),
+        Map.entry("regex_test", "测试正则表达式匹配"),
+        Map.entry("string_utils", "字符串处理：大小写、trim、长度"),
+        Map.entry("escape_string", "字符串转义/反转义（html/json/java/url/regex/shell）"),
+        Map.entry("number_convert", "进制转换"),
+        Map.entry("format_code", "代码格式化（缩进、换行）"),
+        Map.entry("markdown_render", "Markdown 转 HTML"),
+        Map.entry("diff_text", "比较两段文本的差异"),
+        Map.entry("change_permissions", "修改文件权限（可执行/可写/可读）"),
+        Map.entry("cron_parse", "解析 Cron 表达式")
+    );
+
+    /** 从对照表的一行里认工具名（只认形如 xxx_yyy 的小写标识符）。 */
+    private static final java.util.regex.Pattern TOOL_TOKEN =
+        java.util.regex.Pattern.compile("\\b([a-z][a-z0-9_]{2,})\\b");
+
+    /**
+     * 生成工具选择对照表，并**把手头没有的工具那几行去掉**。
+     *
+     * <p>对照表是静态文案，里面点名了 head_tail_file、line_count 这些工具；
+     * 用户在设置里把插件关掉之后，清单里已经没这个工具了，表格却还让模型去用它 ——
+     * 模型照做就撞"未找到工具"，白烧一轮（本机一轮十几秒）。所以这里按当前实际可用的
+     * 工具名过滤一遍：一行里"→"后面那个主工具不在名单里，整行删掉。
+     */
+    private static String toolChoiceTable(List<ToolPlugin> available) {
+        java.util.Set<String> names = available.stream()
+            .map(ToolPlugin::getName)
+            .filter(n -> n != null && !n.isBlank())
+            .collect(java.util.stream.Collectors.toSet());
+        StringBuilder sb = new StringBuilder();
+        for (String line : TOOL_CHOICE_TABLE.split("\n")) {
+            int arrow = line.indexOf('→');
+            String primary = null;
+            if (arrow >= 0) {
+                java.util.regex.Matcher m = TOOL_TOKEN.matcher(line.substring(arrow));
+                if (m.find()) {
+                    primary = m.group(1);
+                }
+            }
+            if (primary != null && !names.contains(primary)) {
+                continue;   // 这个工具当前不可用，别让模型去调
+            }
+            sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 最容易混的几组工具，直接写成对照表。
+     *
+     * <p>55 个工具的清单里，模型要在两三个近义工具之间选；写完 48 字描述它还是会选错
+     * （实测"前 5 行"和"多少行代码"都选了 list_directory）。对照表把"用户会怎么问 → 用哪个"
+     * 挑明，比任何描述都直接。
+     */
+    private static final String TOOL_CHOICE_TABLE = """
+        ## 别选错工具（下面这几组最容易混，逐条对照）
+        **总原则：用户已经指明是哪个文件/目录时，直接用针对它的那个工具，不要先 list_directory 逛一圈。**
+        - “文件的前 N 行 / 最后几行” → head_tail_file（不是 read_file，更不是 list_directory）
+        - “有多少行 / 统计行数 / 多少行代码”（文件或目录都算）→ line_count
+        - “有哪些文件 / 列一下目录” → list_directory；“目录结构 / 画成树” → directory_tree
+        - “找文件（按名字、后缀）” → glob_files；“找内容（哪里提到 X）” → search_in_files
+        - “建个文件并写上内容” → write_file；“只建一个空文件” → create_file
+        - “追加到末尾” → append_file；“替换/改内容/按行改” → modify_file
+        - “把 A 改名成 B / 移到某处” → move_file；“复制一份” → copy_file；“删掉” → delete_file
+        - “跑命令 / 编译 / 安装 / 执行一次” → execute_command
+        - “要一直跑的服务 / 每 5 秒做一次 / 常驻进程” → run_background（不要写脚本再手动跑）
+        - “现在几点 / 今天几号” → timestamp；“什么 CPU、多少内存” → system_info
+        - “算哈希” → hash；“base64” → base64；“JSON 格式化” → json_format
+        - “查资料 / 网上搜” → web_search；“抓某个网址” → fetch_url
+        - “把某段话翻译成英文/中文” → translate（不要自己翻译，用工具）
+        - “算一下/转换/解析”这类纯计算，先看有没有对应工具，有就用，别自己心算
+        """;
+
+    /**
+     * 按模式取工具，再过一遍插件 SPI 的过滤（用户在设置里关掉的插件，它的工具直接从
+     * 提示词里消失 —— 这样模型压根不会去调，比"调了再拒绝"省一整轮）。
+     */
+    private List<ToolPlugin> filteredTools(AgentMode mode, String sessionId) {
+        List<ToolPlugin> all = pluginRegistry.getToolsByMode(mode);
+        if (com.lioncode.core.agent.spi.AgentSpi.size() == 0) {
+            return all;   // 没装插件：一个 if 就返回，零开销
+        }
+        java.util.Set<String> names = com.lioncode.core.agent.spi.AgentSpi.applyToolFilter(
+            sessionId, all.stream().map(ToolPlugin::getName).collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new)));
+        return all.stream().filter(t -> names.contains(t.getName())).toList();
     }
 
     /**
@@ -1166,6 +1411,84 @@ public class AgentLoop {
     }
 
     /**
+     * 上下文预算上限（token）。
+     *
+     * <p>0 = 自动：问一下适配器这个模型的窗口有多大，取 75% 当预算（留 25% 给回答和
+     * 下一轮的工具结果）。问不到就退化成 {@link #FALLBACK_CONTEXT_TOKENS}。
+     * 非要手动钉死就用 {@code --lionbox.agent.context-limit-tokens=8000}。
+     */
+    @org.springframework.beans.factory.annotation.Value("${lionbox.agent.context-limit-tokens:0}")
+    private int contextLimitTokens;
+
+    /** 压缩时尾部保留多少条消息（越靠近现在越有用）。 */
+    @org.springframework.beans.factory.annotation.Value("${lionbox.agent.context-keep-recent:16}")
+    private int contextKeepRecent;
+
+    /** 问不到模型窗口时的兜底预算：32K 对绝大多数本地/云模型都安全。 */
+    private static final int FALLBACK_CONTEXT_TOKENS = 32768;
+
+    /** 模型窗口查询结果缓存（别每轮都去问一遍适配器）。 */
+    private volatile int cachedModelContextTokens = -1;
+
+    /** 本次实际生效的上下文预算（token）。 */
+    private int effectiveContextLimit(String model) {
+        if (contextLimitTokens > 0) {
+            return contextLimitTokens;
+        }
+        int ctx = cachedModelContextTokens;
+        if (ctx <= 0) {
+            ctx = FALLBACK_CONTEXT_TOKENS;
+            try {
+                ModelAdapter adapter = adapterManager.getActiveAdapter();
+                if (adapter != null) {
+                    for (var info : adapter.getAvailableModels()) {
+                        if (info != null && info.maxContextTokens() != null && info.maxContextTokens() > 0
+                                && (model == null || model.isBlank() || model.equals(info.id())
+                                    || model.equals(info.name()))) {
+                            ctx = info.maxContextTokens();
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("问模型上下文窗口失败，用兜底 {} token: {}", FALLBACK_CONTEXT_TOKENS, e.toString());
+            }
+            cachedModelContextTokens = ctx;
+        }
+        // 只用到窗口的 75%：回答本身、以及下一轮追加的工具结果都要占地方
+        return Math.max(2048, (int) (ctx * 0.75));
+    }
+
+    /**
+     * 超预算就把中间那段历史折叠成摘要（就地替换 messages 的内容）。
+     *
+     * <p>只在**真的要发请求之前**做，压缩结果只影响这一次请求，不动落盘的历史 ——
+     * 用户切换会话回来还能看到完整原文，这一点很重要（摘要只是给模型的"记忆副本"）。
+     */
+    private void maybeCompressContext(String sessionId, List<ChatMessage> messages, String model) {
+        try {
+            int limit = effectiveContextLimit(model);
+            int keep = Math.max(4, contextKeepRecent);
+            ContextCompressor.Result r = ContextCompressor.fit(messages, limit, keep);
+            if (!r.compressed()) {
+                return;
+            }
+            log.info("上下文压缩：{} → {} token，折叠 {} 条历史（预算 {} token）- 会话 {}",
+                r.tokensBefore(), r.tokensAfter(), r.droppedMessages(), limit, sessionId);
+            eventStore.recordEvent(sessionId, LionEvent.EventType.CONTEXT_COMPRESSED,
+                Map.of("tokensBefore", r.tokensBefore(), "tokensAfter", r.tokensAfter(),
+                       "dropped", r.droppedMessages(), "limit", limit),
+                "上下文压缩：" + r.tokensBefore() + " → " + r.tokensAfter() + " token，折叠 "
+                    + r.droppedMessages() + " 条历史");
+            messages.clear();
+            messages.addAll(r.messages());
+        } catch (Exception e) {
+            // 压缩是"保命"机制，它自己出问题绝不能把正常对话带崩
+            log.warn("上下文压缩失败，按原样发送（可能超长）: {}", e.toString());
+        }
+    }
+
+    /**
      * 单个工具的执行上限（秒）。
      *
      * <p>实测教训：`git_remote show origin` 会去连远端，git 在等凭据时**永远不关 stdout**，
@@ -1176,6 +1499,63 @@ public class AgentLoop {
      */
     @org.springframework.beans.factory.annotation.Value("${lionbox.agent.tool-timeout-seconds:600}")
     private int toolTimeoutSeconds;
+
+    /**
+     * 本次派发实际用的工具超时：先问插件 SPI（"agent 大循环插件"允许用户在设置里改），
+     * 插件没给就用配置文件里的值。做成方法而不是字段，是因为插件可以在运行时改设置 ——
+     * 缓存成字段的话，用户改完得重启才生效。
+     */
+    private int timeoutFor(String sessionId) {
+        int t = com.lioncode.core.agent.spi.AgentSpi.loopInt(sessionId, "toolTimeoutSeconds", toolTimeoutSeconds);
+        return t > 0 ? t : toolTimeoutSeconds;
+    }
+
+    /**
+     * 自动授权审查插件：让**另一个模型**看一眼这次工具调用要不要放行。
+     *
+     * <p>【和"审批策略"的分工】{@code approvalPolicy} 是本地规则（哪些工具一律禁、哪些要问用户），
+     * 快、确定、不花钱；这个插件是"语义审核"——按工具名拦不住的场景（比如 `execute_command`
+     * 里那串命令到底危不危险），本地规则看不懂，得让模型读一遍再判。两条互补，都要过。</p>
+     *
+     * <p>返回 null = 放行；返回非 null = 拒绝，字符串就是回给模型的理由。</p>
+     *
+     * <p>【失败必须放行】审核模型连不上、超时、返回没法解析 —— 一律当放行。
+     * 反过来（连不上就拒绝）会让"网络一抖整台机器都不能干活"，那比漏审一次糟糕得多。</p>
+     */
+    private String reviewToolCall(String sessionId, ToolPlugin tool, String toolName,
+                                  Map<String, Object> args) {
+        try {
+            var opt = pluginRegistry.getById(com.lioncode.core.plugin.review.ApprovalReviewPlugin.PLUGIN_ID);
+            if (opt.isEmpty()
+                    || !(opt.get() instanceof com.lioncode.core.plugin.review.ApprovalReviewPlugin review)) {
+                return null;
+            }
+            var decision = review.check(sessionId, toolName, args);
+            if (decision == null || !decision.needsReview()) {
+                return null;
+            }
+            String prompt = review.buildReviewPrompt(toolName, args,
+                sessionManager.getSession(sessionId)
+                    .flatMap(s -> workspaceManager.getWorkspace(s.workspaceId()))
+                    .map(ws -> ws.path())
+                    .orElse("(未绑定工作区)"));
+            String model = review.model() == null || review.model().isBlank() ? null : review.model();
+            ModelAdapter adapter = adapterManager.getActiveAdapter();
+            ModelResponse reply = adapter.chatWithOptions(
+                List.of(ChatMessage.system("你是工具调用安全审核员，只回答 ALLOW 或 DENY，并给一句理由。"),
+                        ChatMessage.user(prompt)),
+                model, ThinkingLevel.LOW, List.of(), null, 200);
+            var verdict = com.lioncode.core.plugin.review.ApprovalReviewPlugin
+                .parseVerdict(reply == null ? null : reply.content());
+            if (verdict != null && !verdict.allow()) {
+                return review.denyMessage(toolName, verdict.reason());
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("自动授权审查出错，按放行处理（不能因为审核器坏了就不让干活）: {}", e.toString());
+            return null;
+        }
+    }
 
     /**
      * 带超时执行工具。执行放到单独线程，并**在该线程里重新设置上下文**
@@ -1206,11 +1586,11 @@ public class AgentLoop {
                     com.lioncode.core.session.SessionContext.clear();
                 }
             });
-            return future.get(toolTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            return future.get(timeoutFor(sessionId), java.util.concurrent.TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
             log.error("工具 {} 超过 {} 秒没返回，判定卡住并放弃等待 - 会话: {}",
-                toolName, toolTimeoutSeconds, sessionId);
-            return ToolResult.error("工具执行超时（超过 " + toolTimeoutSeconds + " 秒还没返回）: " + toolName
+                toolName, timeoutFor(sessionId), sessionId);
+            return ToolResult.error("工具执行超时（超过 " + timeoutFor(sessionId) + " 秒还没返回）: " + toolName
                 + "。多半是在等网络、凭据或用户输入。请换个参数重试，或用别的等价工具完成这件事。");
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
@@ -1316,6 +1696,22 @@ public class AgentLoop {
             return arguments;
         }
         Map<String, Object> out = new java.util.LinkedHashMap<>(arguments);
+
+        // 0) 先把"键名写歪了"的参数改名到工具声明的名字上（file_path→path、max_depth→maxDepth、
+        //    大小写不一致…）。只改键名、不动值，而且多个候选就放弃，所以不会有副作用。
+        //    这一步在类型转换之前做，否则歪掉的键压根进不了下面的转换循环。
+        for (Map.Entry<?, ?> e : props.entrySet()) {
+            String key = String.valueOf(e.getKey());
+            if (out.containsKey(key)) {
+                continue;
+            }
+            String matched = ToolArgAliases.matchKey(key, out.keySet());
+            if (matched != null && out.get(matched) != null) {
+                out.put(key, out.get(matched));
+                log.debug("参数名归一化: {} → {}（工具 {}）", matched, key, tool.getName());
+            }
+        }
+
         for (Map.Entry<?, ?> e : props.entrySet()) {
             String key = String.valueOf(e.getKey());
             if (!out.containsKey(key) || !(e.getValue() instanceof Map<?, ?> prop)) {
@@ -1583,7 +1979,18 @@ public class AgentLoop {
      * 转换为模型API所需的工具定义格式。
      */
     private List<Map<String, Object>> buildToolDefinitions(AgentMode mode) {
-        List<ToolPlugin> tools = pluginRegistry.getToolsByMode(mode);
+        return buildToolDefinitions(mode, null);
+    }
+
+    /**
+     * 构建工具定义列表（带会话，走插件过滤）。
+     *
+     * <p>【为什么要带 sessionId】原生通道下这份定义是随请求下发的，等于模型看到的完整工具集；
+     * 如果这里不过滤，用户在设置里关掉的插件**照样会被下发给模型、而且真调用了还能执行** ——
+     * "关掉插件"就变成了只影响文本通道的假开关。会话维度的开关必须两条通道都一致。
+     */
+    private List<Map<String, Object>> buildToolDefinitions(AgentMode mode, String sessionId) {
+        List<ToolPlugin> tools = filteredTools(mode, sessionId);
         if (tools.isEmpty()) {
             return List.of();
         }

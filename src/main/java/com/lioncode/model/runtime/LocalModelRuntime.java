@@ -250,6 +250,8 @@ public class LocalModelRuntime {
 
     private final Object startLock = new Object();
     private volatile Process process;
+    /** 最近一次拉起的进程 PID（诊断用；process 被置空后还能报出来） */
+    private volatile long startedPid = -1;
     private final AtomicBoolean starting = new AtomicBoolean(false);
     private final AtomicReference<String> lastError = new AtomicReference<>("");
     private final AtomicReference<String> phase = new AtomicReference<>("idle");
@@ -272,6 +274,24 @@ public class LocalModelRuntime {
 
     public boolean isLazyLoad() {
         return lazyLoad;
+    }
+
+    /**
+     * 实际生效的监听端口。
+     *
+     * <p>【为什么需要它】spawn() 用的是 {@code cfgInt("port", port)}（设置页可改），
+     * 而 healthy()/portFree() 一直只用字段 port（application.yml 的默认值）。
+     * 于是用户在设置页把端口改成 8789 之后：进程按 8789 起来，
+     * 健康检查却一直探 8788 → 永远"没就绪" → 白等满 start-timeout 秒然后报启动失败，
+     * 而模型其实早就好了。统一走这个方法取值。
+     */
+    public int effectivePort() {
+        return cfgInt("port", port);
+    }
+
+    /** 实际生效的监听地址（同上，spawn 用 cfg，探活用字段） */
+    public String effectiveHost() {
+        return cfgStr("host", host);
     }
 
     /**
@@ -745,8 +765,8 @@ public class LocalModelRuntime {
     }
 
     private Path findModelFile(String file) {
-        if (file == null || file.isBlank()) {
-            return null;
+        if (!isSafeModelFileName(file)) {
+            return null;                     // 带路径的"文件名"一律不认，防止越界探测
         }
         for (Path dir : scanDirs()) {
             for (Path base : new Path[] {dir, dir.resolve("models")}) {
@@ -779,6 +799,32 @@ public class LocalModelRuntime {
         return sb.toString();
     }
 
+    /**
+     * 判断一个"模型文件名"是不是安全的单级文件名。
+     *
+     * <p>【为什么必须有这道关】{@code llama.modelFile} 是设置页可写的配置项
+     * （POST /api/runtime/local/config 传什么存什么），而它会一路被当成路径片段：
+     * downloadTarget() → {@code dir.resolve(name)}、findModelFile() → {@code base.resolve(file)}。
+     * 填 {@code ..\..\..\Users\Public\x.gguf} 就能把下载中的 .part 文件写到程序目录之外
+     * （自动下载这条路径本来没有 isKnownModel 校验，只有 /local/models/download 才有）。
+     * 这里只放行"纯文件名"，把目录分隔符、上级引用、盘符、Windows 非法字符全部挡掉。
+     */
+    static boolean isSafeModelFileName(String file) {
+        if (file == null || file.isBlank() || file.length() > 128) {
+            return false;
+        }
+        if (file.contains("/") || file.contains("\\") || file.contains("..")) {
+            return false;
+        }
+        if (file.indexOf(':') >= 0 || file.indexOf('\0') >= 0) {
+            return false;
+        }
+        if (!file.toLowerCase().endsWith(".gguf")) {
+            return false;                       // 只认 GGUF，避免把配置写歪时到处落文件
+        }
+        return !file.equals(".") && !file.equals("..");
+    }
+
     /** 本地现成的一份权重（把用户自己塞的 GGUF 也算进来） */
     public record LocalModel(String file, String path, double sizeGb, boolean known, long bytes) {}
 
@@ -803,7 +849,7 @@ public class LocalModelRuntime {
 
     /** 这个模型文件本地是否已经有了（设置页/模型清单里用来标"已下载"）。 */
     public boolean isModelDownloaded(String file) {
-        if (file == null || file.isBlank()) {
+        if (!isSafeModelFileName(file)) {
             return false;
         }
         try {
@@ -821,8 +867,18 @@ public class LocalModelRuntime {
         }
     }
 
+    /**
+     * 下载目标路径。
+     *
+     * <p>名字先过 {@link #isSafeModelFileName}：越界的名字直接返回 null（调用方按"没有可写目录"处理），
+     * 绝不用 {@code resolve} 把 {@code ..\} 拼进真实路径。
+     */
     private Path downloadTarget(String file) {
         String name = (file == null || file.isBlank()) ? effectiveModelFile() : file;
+        if (!isSafeModelFileName(name)) {
+            log.warn("模型文件名非法（含路径分隔符/上级引用），拒绝作为下载目标: {}", name);
+            return null;
+        }
         for (Path dir : appDirs()) {
             try {
                 if (Files.isDirectory(dir) && Files.isWritable(dir)) {
@@ -871,6 +927,13 @@ public class LocalModelRuntime {
             client.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
         int code = resp.statusCode();
         if (code != 200 && code != 206) {
+            // 【必须关】BodyHandlers.ofInputStream() 拿到的响应体是我们负责关闭的：
+            // 直接抛异常会把这条连接连同底层 socket 一起挂着，直到 GC 才回收。
+            try {
+                resp.body().close();
+            } catch (Exception ignored) {
+                // 关不掉也不影响主流程
+            }
             throw new IOException("HTTP " + code + "（检查仓库 " + modelRepo + " 与文件名 "
                     + effectiveModelFile() + "）");
         }
@@ -897,7 +960,12 @@ public class LocalModelRuntime {
              java.io.OutputStream out = Files.newOutputStream(part, opts)) {
             byte[] buf = new byte[1 << 20];
             int n;
-            while ((n = in.read(buf)) > 0) {
+            // 用 != -1 而不是 > 0：按 InputStream 契约读满缓冲区时应返回实际字节数，
+            // 但个别实现/包装流会返回 0，那样 while(n > 0) 会变成死循环
+            while ((n = in.read(buf)) != -1) {
+                if (n == 0) {
+                    continue;
+                }
                 out.write(buf, 0, n);
                 downloadBytes += n;
                 if (downloadBytes - lastLog >= 256L * 1024 * 1024) {
@@ -1195,6 +1263,7 @@ public class LocalModelRuntime {
         log.info("正在拉起本地模型运行时：{}（-ngl {}，上下文 {}，KV {}，slot {}，temp {}，repeat-penalty {}，最多 {} token）",
             exe, ngl, ctxSize, quantizedKv ? kvCacheType : "f16", parallelSlots,
             temperature, repeatPenalty, maxPredict);
+        Process started = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             // 工作目录必须是 exe 所在目录：llama-server 依赖同目录的
@@ -1203,7 +1272,13 @@ public class LocalModelRuntime {
             pb.redirectOutput(ProcessBuilder.Redirect.appendTo(logFile().toFile()));
             pb.redirectError(ProcessBuilder.Redirect.appendTo(
                 logFile().resolveSibling("lionbox-model.err").toFile()));
-            process = pb.start();
+            // 【必须用局部变量】下面等待就绪的循环原来每次读的是 this.process 字段，
+            // 而 killProcess()（用户点"卸载模型"、重启、预热被打断）会把该字段置为 null：
+            // 一边启动一边点停止 → 循环里 process.isAlive() 直接 NPE，
+            // 报错信息变成一句莫名其妙的 NullPointerException，而不是"启动被中止"。
+            started = pb.start();
+            process = started;
+            startedPid = started.pid();
         } catch (IOException e) {
             lastError.set("启动进程失败: " + e.getMessage());
             log.error("启动本地模型进程失败", e);
@@ -1212,14 +1287,20 @@ public class LocalModelRuntime {
 
         long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
         while (System.currentTimeMillis() < deadline) {
-            if (!process.isAlive()) {
-                lastError.set("进程退出，退出码 " + process.exitValue());
+            if (process != started) {
+                // 本次启动已被 stop()/另一次 spawn() 取代：不算失败，也不要再报错
+                log.warn("本地模型启动被中止（进程已被停止/替换）");
+                lastError.set("启动被中止");
+                return false;
+            }
+            if (!started.isAlive()) {
+                lastError.set("进程退出，退出码 " + started.exitValue());
                 log.error("本地模型进程启动后立即退出，退出码 {}。日志：{}",
-                    process.exitValue(), logFile());
+                    started.exitValue(), logFile());
                 return false;
             }
             if (healthy()) {
-                log.info("本地模型已就绪：http://{}:{}/v1（模型 {}）", host, port, modelName);
+                log.info("本地模型已就绪：http://{}:{}/v1（模型 {}）", effectiveHost(), effectivePort(), modelName);
                 return true;
             }
             try {
@@ -1236,11 +1317,13 @@ public class LocalModelRuntime {
 
     /** 探测本地运行时是否已经能服务（/health 优先，根路径在 llama.cpp 上会 404） */
     private boolean healthy() {
+        String h = effectiveHost();
+        int p = effectivePort();
         for (String path : new String[] {"/health", "/v1/models", "/"}) {
             HttpURLConnection conn = null;
             try {
                 conn = (HttpURLConnection) URI.create(
-                    "http://" + host + ":" + port + path).toURL().openConnection();
+                    "http://" + h + ":" + p + path).toURL().openConnection();
                 conn.setConnectTimeout(1500);
                 conn.setReadTimeout(2500);
                 conn.setRequestMethod("GET");
@@ -1299,27 +1382,51 @@ public class LocalModelRuntime {
 
     /** taskkill /T /F：Windows 上唯一能可靠杀掉整棵进程树的办法 */
     private void taskkillTree(long pid) {
+        if (pid <= 0) {
+            return;
+        }
+        Process k = null;
         try {
-            Process k = new ProcessBuilder("taskkill", "/PID", String.valueOf(pid), "/T", "/F")
+            k = new ProcessBuilder("taskkill", "/PID", String.valueOf(pid), "/T", "/F")
                 .redirectErrorStream(true)
+                // 【必须丢弃输出】默认是管道，而这里没人读它：taskkill 输出超过管道缓冲区
+                // （约 64KB）就会一直阻塞，进程对象和管道句柄一起泄漏。
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();
-            k.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
-            log.info("已用 taskkill /T /F 结束进程树 PID {}", pid);
+            if (!k.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                log.warn("taskkill 15 秒未返回，强制结束 PID {}", pid);
+                k.destroyForcibly();
+            } else {
+                log.info("已用 taskkill /T /F 结束进程树 PID {}", pid);
+            }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log.warn("taskkill 失败: {}", e.getMessage());
+        } finally {
+            if (k != null && k.isAlive()) {
+                k.destroyForcibly();
+            }
         }
     }
 
     /** 端口是否已经没人监听了（用来确认进程真的死透） */
     private boolean portFree() {
         try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress(host, port), 800);
+            s.connect(new java.net.InetSocketAddress(effectiveHost(), effectivePort()), 800);
             return false;   // 还能连上 = 还有人在服务
         } catch (Exception e) {
             return true;
         }
     }
 
+    /**
+     * 取日志尾部若干行（诊断用）。
+     *
+     * <p>【为什么不能 readAllLines】llama-server 会把每个请求都写进这个日志，
+     * 跑一天能有几百 MB。启动失败时正好调它 —— 一次性读进内存就是一次 OOM，
+     * 而且是在"已经失败"的路径上雪上加霜。改成从文件尾部读固定大小的窗口。
+     */
     private String tailLog() {
         try {
             Path err = logFile().resolveSibling("lionbox-model.err");
@@ -1327,9 +1434,25 @@ public class LocalModelRuntime {
             if (!Files.exists(target)) {
                 return "(没有日志)";
             }
-            List<String> lines = Files.readAllLines(target);
-            int from = Math.max(0, lines.size() - 15);
-            return String.join("\n", lines.subList(from, lines.size()));
+            long size = Files.size(target);
+            int window = 64 * 1024;                       // 只读最后 64KB
+            long from = Math.max(0, size - window);
+            byte[] buf;
+            try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(target.toFile(), "r")) {
+                raf.seek(from);
+                buf = new byte[(int) Math.min(window, size)];
+                raf.readFully(buf);
+            }
+            String text = new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+            if (from > 0) {
+                int nl = text.indexOf('\n');              // 掐掉半行
+                if (nl >= 0) {
+                    text = text.substring(nl + 1);
+                }
+            }
+            String[] lines = text.split("\r?\n");
+            int start = Math.max(0, lines.length - 15);
+            return String.join("\n", java.util.Arrays.copyOfRange(lines, start, lines.length));
         } catch (Exception e) {
             return "(读日志失败: " + e.getMessage() + ")";
         }

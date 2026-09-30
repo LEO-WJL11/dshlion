@@ -74,7 +74,10 @@ public class SessionDispatcher {
         MessageQueue.QueuedMessage message = messageQueue.submit(
             sessionId, userMessage, steer ? 100 : 0, steer, model,
             thinkingLevel != null ? thinkingLevel.name() : ThinkingLevel.MEDIUM.name());
-        startWorker(sessionId);
+        // 队列满被拒时 future 已经带着异常完成了，不必再起一个只会空转 30 秒的 worker
+        if (!message.future().isDone()) {
+            startWorker(sessionId);
+        }
         return message.future();
     }
 
@@ -144,7 +147,9 @@ public class SessionDispatcher {
                 ThinkingLevel level = parseLevel(message.thinkingLevel());
                 String result = agentLoop.processMessage(
                     sessionId, message.content(), mode, level, message.model());
-                message.future().complete(result);
+                // 归一化 null：complete(null) 会让 future.get() 返回 null，
+                // 调用方（ChatController）再把它塞进 ApiResponse.data，前端拿到 null 显示空白
+                message.future().complete(result == null ? "" : result);
             } catch (Exception e) {
                 log.error("消息处理失败: {} (会话: {})", message.id(), sessionId, e);
                 message.future().completeExceptionally(e);

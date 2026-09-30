@@ -72,7 +72,9 @@ public record LionEvent(
         /** 工作区切换 */
         WORKSPACE_CHANGE("工作区切换"),
         /** 系统错误 */
-        SYSTEM_ERROR("系统错误");
+        SYSTEM_ERROR("系统错误"),
+        /** 上下文压缩（历史太长，折叠成摘要） */
+        CONTEXT_COMPRESSED("上下文压缩");
 
         private final String displayName;
 

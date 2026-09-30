@@ -41,9 +41,20 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     private static final MediaType JSON_TYPE = MediaType.parse("application/json; charset=utf-8");
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    private String baseUrl = "";
-    private String apiKey = "";
+    /**
+     * 配置字段。
+     *
+     * 【为什么是 volatile】updateConfig() 由 HTTP 线程（设置页保存）调用，
+     * 而 doChat/chatStream 由会话 worker 线程读取。原来这两个字段是普通字段，
+     * 没有 happens-before 边：改完端点后 worker 线程可能**很长时间**还读着旧值
+     * （JMM 允许永远读不到），表现就是"设置里改了地址，发消息还是连旧的"。
+     */
+    private volatile String baseUrl = "";
+    private volatile String apiKey = "";
     private final OkHttpClient httpClient;
+
+    /** 只用于 /models 这类"必须快速失败"的短请求（复用连接池，只是超时更短） */
+    private final OkHttpClient shortTimeoutClient;
 
     /**
      * 本地模型运行时。
@@ -61,6 +72,12 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
             // 本地模型 256K 上下文 + 最多 4096 token 输出，慢的时候要好几分钟。
             .readTimeout(900, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            .build();
+        // 【为什么单独一个客户端】/models 是"拉个清单"，正常几十毫秒就该回来。
+        // 以前它复用上面那个 900 秒读超时的客户端：端点半死不活（端口通但不回包）时，
+        // 一次 GET /api/models 会把 Tomcat 线程挂满 15 分钟，设置页直接假死。
+        this.shortTimeoutClient = httpClient.newBuilder()
+            .readTimeout(20, TimeUnit.SECONDS)
             .build();
     }
 
@@ -89,15 +106,32 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
 
     @Override
     public void updateConfig(Map<String, Object> config) {
+        if (config == null) {
+            return;
+        }
+        // 【为什么不直接强转 String】配置块是用户可写的 JSON（/api/chat/adapter/config 等），
+        // 传个数字或对象进来时 (String) 会抛 ClassCastException，而且是在"保存配置"的
+        // 请求里炸掉；这里统一按字符串语义取值，取不到就维持原值。
         if (config.containsKey("baseUrl")) {
-            this.baseUrl = (String) config.get("baseUrl");
+            this.baseUrl = safeStr(config.get("baseUrl"), this.baseUrl);
         }
         if (config.containsKey("apiKey")) {
-            this.apiKey = (String) config.get("apiKey");
+            this.apiKey = safeStr(config.get("apiKey"), this.apiKey);
         }
         // 换了端点就忘掉上一次的"拒绝 tools"结论：新端点可能完全支持原生调用
         toolsRejected = false;
         log.info("本地模型适配器配置已更新: baseUrl={}", baseUrl);
+    }
+
+    /** 宽松转字符串：null → 用旧值；其它类型一律 String.valueOf（不抛 CCE） */
+    private static String safeStr(Object value, String fallback) {
+        if (value == null) {
+            return fallback == null ? "" : fallback;
+        }
+        if (value instanceof String s) {
+            return s;
+        }
+        return String.valueOf(value);
     }
 
     @Override
@@ -254,7 +288,28 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
     @Override
     public Flux<ModelChunk> chatStream(List<ChatMessage> messages, String model, ThinkingLevel thinkingLevel,
                                        List<Map<String, Object>> tools, Integer maxTokens) {
-        return Flux.create(sink -> startStream(sink, messages, model, thinkingLevel, tools, 0, maxTokens));
+        return Flux.create(sink -> {
+            // 【必须处理取消】Flux.create 默认不会把"订阅者取消了"传给下层的 OkHttp SSE。
+            // 用户点停止 / 前端断开连接 / AgentLoop 主动放弃这一轮时，SSE 请求会继续跑到底
+            // （本地模型 11 token/s，一轮可能好几分钟），连接和显存都白占着。
+            // 这里存一份 EventSource 引用，取消时主动 cancel()。
+            EventSource[] holder = new EventSource[1];
+            sink.onCancel(() -> cancelQuietly(holder[0]));
+            sink.onDispose(() -> cancelQuietly(holder[0]));
+            startStream(sink, holder, messages, model, thinkingLevel, tools, 0, maxTokens);
+        });
+    }
+
+    /** 取消 SSE 连接；已经结束的 EventSource cancel() 是无害的空操作 */
+    private static void cancelQuietly(EventSource source) {
+        if (source == null) {
+            return;
+        }
+        try {
+            source.cancel();
+        } catch (Exception e) {
+            log.debug("取消流式请求失败（忽略）: {}", e.getMessage());
+        }
     }
 
     /**
@@ -263,7 +318,8 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
      *   stage 1 → 去掉 tool_choice / parallel_tool_calls
      *   stage 2 → 去掉工具定义（退化成文本 &lt;tool_call&gt; 约定）
      */
-    private void startStream(reactor.core.publisher.FluxSink<ModelChunk> sink, List<ChatMessage> messages,
+    private void startStream(reactor.core.publisher.FluxSink<ModelChunk> sink, EventSource[] holder,
+                             List<ChatMessage> messages,
                              String model, ThinkingLevel thinkingLevel, List<Map<String, Object>> tools,
                              int stage, Integer maxTokens) {
         boolean hasTools = tools != null && !tools.isEmpty();
@@ -292,7 +348,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
             Request httpRequest = builder.build();
 
             EventSource.Factory factory = EventSources.createFactory(httpClient);
-            factory.newEventSource(httpRequest, new EventSourceListener() {
+            holder[0] = factory.newEventSource(httpRequest, new EventSourceListener() {
                 @Override
                 public void onEvent(EventSource eventSource, String id, String type, String data) {
                     if ("[DONE]".equals(data)) {
@@ -313,7 +369,7 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
                     if (response != null && response.code() == 400 && stage < 2 && hasTools) {
                         log.warn("流式请求被拒(HTTP 400)，降级到 stage {} 重试: {}",
                             stage + 1, response.message());
-                        startStream(sink, messages, model, thinkingLevel, tools, stage + 1, maxTokens);
+                        startStream(sink, holder, messages, model, thinkingLevel, tools, stage + 1, maxTokens);
                         return;
                     }
                     if (t != null) {
@@ -345,7 +401,8 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
             }
             Request request = builder.build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            // 短超时客户端：清单接口没必要等 15 分钟（见字段注释）
+            try (Response response = shortTimeoutClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     log.warn("获取模型列表失败: HTTP {}", response.code());
                     return List.of();
@@ -532,15 +589,12 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
         }
 
         // 解析token使用
-        ModelResponse.TokenUsage usage = null;
-        if (root.has("usage")) {
-            JsonNode usageNode = root.get("usage");
-            usage = new ModelResponse.TokenUsage(
-                usageNode.get("prompt_tokens").asInt(),
-                usageNode.get("completion_tokens").asInt(),
-                usageNode.get("total_tokens").asInt()
-            );
-        }
+        // 【为什么每个字段都要判空】以前是 usageNode.get("prompt_tokens").asInt()：
+        //   - usage 为 JSON null 时，NullNode.get(...) 返回 null → NPE；
+        //   - 只回 total_tokens 不回 prompt/completion 的实现同样 NPE。
+        // 而 NPE 会从 parseResponse 里冒出去被 doChat 包成"模型调用失败"，
+        // 于是**一次完全成功的回答被整段丢掉**（还会触发降级重试，白烧一遍 token）。
+        ModelResponse.TokenUsage usage = parseUsage(root.get("usage"));
 
         return new ModelResponse(content, toolCalls, true, usage, finishReason, reasoningContent,
             malformedToolCall);
@@ -563,6 +617,36 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
         }
         String s = v.asText();
         return s == null ? defaultValue : s;
+    }
+
+    /** 安全取整数字段（缺失/null/非数字一律取默认值，绝不抛异常） */
+    private static Integer intOf(JsonNode node, String field) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull() || !v.canConvertToInt()) {
+            return null;
+        }
+        return v.asInt();
+    }
+
+    /**
+     * 解析 usage 块，任何字段缺失都不影响主流程（返回 null 表示服务端没给用量）
+     */
+    private static ModelResponse.TokenUsage parseUsage(JsonNode usageNode) {
+        if (usageNode == null || usageNode.isNull() || !usageNode.isObject()) {
+            return null;
+        }
+        Integer prompt = intOf(usageNode, "prompt_tokens");
+        Integer completion = intOf(usageNode, "completion_tokens");
+        Integer total = intOf(usageNode, "total_tokens");
+        if (prompt == null && completion == null && total == null) {
+            return null;
+        }
+        int p = prompt == null ? 0 : prompt;
+        int c = completion == null ? 0 : completion;
+        return new ModelResponse.TokenUsage(p, c, total == null ? p + c : total);
     }
 
     /**
@@ -629,18 +713,21 @@ public class OpenAICompatibleAdapter implements ModelAdapter {
 
         List<ModelInfo> models = new ArrayList<>();
         for (JsonNode model : data) {
-            String id = model.get("id").asText();
-            String owner = model.has("owned_by") ? model.get("owned_by").asText() : "unknown";
+            // 【原来这里是 model.get("id").asText()】某个条目没有 id 就直接 NPE，
+            // 被外层 catch 吞成"获取模型列表异常"→ 整个清单变空（一条坏的带崩全部）。
+            String id = textOf(model, "id", "");
+            if (id.isBlank()) {
+                continue;                       // 跳过没有 id 的条目，其余照常返回
+            }
+            String owner = textOf(model, "owned_by", "unknown");
             
             // 根据模型名称判断是否支持思考等级
             boolean supportsThinking = supportsThinking();
             List<ModelInfo.ThinkingLevelOption> thinkingLevels = getThinkingLevels();
             
             // 解析模型元数据（如果有）
-            Integer maxContext = model.has("context_length") ? 
-                model.get("context_length").asInt() : null;
-            Integer maxOutput = model.has("max_output_tokens") ? 
-                model.get("max_output_tokens").asInt() : null;
+            Integer maxContext = intOf(model, "context_length");
+            Integer maxOutput = intOf(model, "max_output_tokens");
             
             models.add(new ModelInfo(
                 id, id, owner,

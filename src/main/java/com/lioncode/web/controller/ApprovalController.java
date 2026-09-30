@@ -53,8 +53,14 @@ public class ApprovalController {
         if (pluginRegistry.getById(toolId).isEmpty()) {
             return ApiResponse.error("工具不存在: " + toolId);
         }
+        // policy 缺失时 Enum.valueOf(null) 抛 NPE（不是 IllegalArgumentException），
+        // 原来的 catch 拦不住 → 500。显式判掉。
+        if (request == null || request.policy() == null || request.policy().isBlank()) {
+            return ApiResponse.error("缺少策略（可选: AUTO_APPROVE / CONFIRM / BLOCK）");
+        }
         try {
-            ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(request.policy());
+            ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(
+                request.policy().trim().toUpperCase(java.util.Locale.ROOT));
             approvalPolicy.setToolPolicy(toolId, policy);
             return ApiResponse.ok("策略已更新", policy.name());
         } catch (IllegalArgumentException e) {
@@ -68,19 +74,32 @@ public class ApprovalController {
      */
     @PostMapping
     public ApiResponse<Map<String, String>> setPolicies(@RequestBody Map<String, String> policies) {
+        if (policies == null || policies.isEmpty()) {
+            return ApiResponse.error("请求体为空，应形如 {\"工具id\":\"策略\"}");
+        }
         int updated = 0;
+        int skipped = 0;
         for (Map.Entry<String, String> entry : policies.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) {
+                skipped++;
+                continue;
+            }
             try {
-                ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(entry.getValue());
+                // valueOf(null) 抛 NPE：原来 catch 的是 IllegalArgumentException，null 值会直接 500
+                ApprovalPolicy.ToolPolicy policy = ApprovalPolicy.ToolPolicy.valueOf(
+                    entry.getValue().trim().toUpperCase(java.util.Locale.ROOT));
                 if (pluginRegistry.getById(entry.getKey()).isPresent()) {
                     approvalPolicy.setToolPolicy(entry.getKey(), policy);
                     updated++;
+                } else {
+                    skipped++;
                 }
             } catch (IllegalArgumentException ignored) {
-                // 跳过无效策略
+                skipped++;   // 跳过无效策略
             }
         }
-        return ApiResponse.ok("已更新 " + updated + " 个工具的策略", null);
+        return ApiResponse.ok("已更新 " + updated + " 个工具的策略"
+            + (skipped > 0 ? "（跳过 " + skipped + " 项无效/不存在的工具）" : ""), null);
     }
 
     /**

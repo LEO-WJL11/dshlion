@@ -1,0 +1,67 @@
+{
+  "name": "lionbox",
+  "displayName": "LionBox",
+  "description": "在 VS Code 内打开 LionBox (Lion-Code Agent Harness) 的本地 Web UI（内嵌 http://127.0.0.1:8080）",
+  "version": "0.1.0",
+  "publisher": "lioncode",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lioncode/lionbox.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "lionbox",
+    "lion-code",
+    "agent",
+    "ai"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lionbox.openWebUI",
+        "title": "打开 LionBox Web UI",
+        "category": "LionBox"
+      },
+      {
+        "command": "lionbox.reload",
+        "title": "重新检测后端并刷新",
+        "category": "LionBox"
+      }
+    ],
+    "configuration": {
+      "title": "LionBox",
+      "properties": {
+        "lionbox.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080",
+          "description": "LionBox 后端地址（Web UI 根地址）。改端口只改这里。"
+        },
+        "lionbox.healthPath": {
+          "type": "string",
+          "default": "/api/runtime/mode",
+          "description": "后端就绪检测路径。收到任何 HTTP 响应即视为已就绪。"
+        },
+        "lionbox.probeTimeoutMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "单次探测超时（毫秒）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package",
+    "publish:marketplace": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.90.0"
+  }
+}

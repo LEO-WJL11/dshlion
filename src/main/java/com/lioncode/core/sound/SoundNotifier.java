@@ -12,7 +12,6 @@ import javax.sound.sampled.FloatControl;
 import javax.sound.sampled.LineEvent;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -95,10 +94,17 @@ public class SoundNotifier {
     private final Map<Kind, Long> lastPlayedAt = new ConcurrentHashMap<>();
 
     /** WAV 字节缓存：从 jar 里读一次就够了，不必每次播放都读 */
-    private final Map<Kind, byte[]> soundCache = new EnumMap<>(Kind.class);
+    /**
+     * 【为什么不是 EnumMap】loadSound() 会被多个线程同时调用（AgentLoop 的工具线程、
+     * HTTP 的试听线程），而 EnumMap 不是线程安全的：并发 put 时 size 字段会算错，
+     * 而且没有 happens-before 边，读到非 null 引用却看到 byte[] 里全是 0 的情况在 JMM 下是允许的
+     * （表现出来就是"偶尔放出一段噪声/没声音"）。换成并发容器，代价可忽略。
+     */
+    private final Map<Kind, byte[]> soundCache = new ConcurrentHashMap<>();
 
-    /** 实际发起播放的次数（自测用） */
-    private volatile long startedCount = 0L;
+    /** 实际发起播放的次数（自测用）。多线程都在 ++，用原子类型 */
+    private final java.util.concurrent.atomic.AtomicLong startedCount =
+        new java.util.concurrent.atomic.AtomicLong();
 
     public SoundNotifier(AppConfigStore configStore) {
         this.configStore = configStore;
@@ -136,7 +142,7 @@ public class SoundNotifier {
 
     /** 实际发起播放的次数（自测断言用） */
     public long startedCount() {
-        return startedCount;
+        return startedCount.get();
     }
 
     /**
@@ -257,7 +263,7 @@ public class SoundNotifier {
                     }
                 });
                 clip.start();                                   // 异步出声，不等它播完
-                startedCount++;
+                startedCount.incrementAndGet();
             } catch (Exception e) {
                 log.debug("音频线路不可用，跳过播放 {}: {}", kind.fileName(), e.getMessage());
                 if (clip != null) {

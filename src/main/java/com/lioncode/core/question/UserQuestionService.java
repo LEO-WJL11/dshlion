@@ -90,11 +90,19 @@ public class UserQuestionService {
             long deadline = System.currentTimeMillis() + timeout * 1000L;
             while (System.currentTimeMillis() < deadline) {
                 if (w.latch.await(POLL_MS, TimeUnit.MILLISECONDS)) {
-                    break;                                  // 用户答了
+                    break;                                  // 用户答了，或被取消（下面统一判断）
                 }
                 if (w.cancelled) {
-                    return new Result(Status.CANCELLED, null, "（提问已取消：会话被中止）");
+                    return cancelled(sessionId, id);
                 }
+            }
+            // 【为什么这里还要再判一次 cancelled】cancelSession() 是先置 cancelled 再 countDown，
+            // await 会立刻返回 true 从而 break 出循环 —— 原来只有"循环里那一句"检查 cancelled，
+            // 于是被取消的提问永远走不到 CANCELLED 分支，而是被当成"等满 N 秒没人回答"，
+            // 回给模型一句"用户 300 秒内没有回答，请基于现有信息继续"。
+            // 用户明明点了停止，模型却继续干活，就是这个原因。
+            if (w.cancelled) {
+                return cancelled(sessionId, id);
             }
             if (w.answer != null && !w.answer.isBlank()) {
                 log.info("用户已回答: 会话={}, 问题ID={}, 答案={}", sessionId, id, abbreviate(w.answer));
@@ -113,6 +121,13 @@ public class UserQuestionService {
         }
     }
 
+    /** 取消时的统一返回（超时/取消的文案必须能区分，否则模型会误以为还能继续） */
+    private Result cancelled(String sessionId, String id) {
+        log.info("提问已取消: 会话={}, 问题ID={}", sessionId, id);
+        return new Result(Status.CANCELLED, null,
+            "（提问已取消：会话被中止。请不要继续执行，直接停下来等用户下一步指示。）");
+    }
+
     /**
      * 用户提交回答
      *
@@ -121,6 +136,9 @@ public class UserQuestionService {
      * @return 是否命中了一个正在等待的问题
      */
     public boolean answer(String questionId, String answer) {
+        if (questionId == null || questionId.isBlank()) {
+            return false;                                   // ConcurrentHashMap.get(null) 会抛 NPE
+        }
         Waiter w = waiters.get(questionId);
         if (w == null) {
             return false;                                   // 超时过了或者 ID 不对
@@ -148,6 +166,9 @@ public class UserQuestionService {
      * @return 取消掉的条数
      */
     public int cancelSession(String sessionId) {
+        if (sessionId == null) {
+            return 0;
+        }
         int n = 0;
         for (Pending p : pending.values()) {
             if (sessionId.equals(p.sessionId())) {

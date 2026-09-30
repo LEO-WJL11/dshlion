@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LionBox —— IntelliJ Platform 插件描述文件
+
+  官方文档：
+    plugin.xml 结构与扩展点  https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html
+    Tool Window 扩展点       https://plugins.jetbrains.com/docs/intellij/tool-windows.html
+    构建号区间               https://plugins.jetbrains.com/docs/intellij/build-number-ranges.html
+
+  注意：
+    - since-build = 261（IntelliJ Platform 2026.1 的 branch 号）。
+    - until-build 不写 = 兼容所有未来版本（官方推荐）。
+    - Gradle 的 patchPluginXml 任务会用 build.gradle.kts 里的配置覆盖下面的
+      <version> 与 <idea-version>，这里写的是"直接手装也能用"的兜底值。
+-->
+<idea-plugin>
+    <id>com.lioncode.lionbox</id>
+    <name>LionBox</name>
+    <version>0.1.0</version>
+    <vendor>LionCode</vendor>
+
+    <description><![CDATA[
+    <p>在 IDE 的 Tool Window 里打开 <b>LionBox</b>（Lion-Code Agent Harness）现有的本地 Web UI。</p>
+    <p>插件不重写界面：它用 JCEF 内嵌浏览器直接加载
+    <code>http://127.0.0.1:8080</code>，并在后端尚未启动时显示等待/重试界面。</p>
+    <ul>
+      <li>后端默认地址：<code>http://127.0.0.1:8080</code>（可用 JVM 参数 <code>-Dlionbox.baseUrl=...</code> 覆盖）</li>
+      <li>就绪检测：<code>GET /api/runtime/mode</code>，收到任何 HTTP 响应即视为已就绪</li>
+    </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <!--
+      JCEF：自 IntelliJ Platform 2026.2 起 JCEF 变成独立 bundled plugin，插件必须显式声明依赖。
+      别名 com.intellij.modules.jcef 自 2025.3.1 起可用（本插件 since-build=261 = 2026.1，安全）。
+      见 https://platform.jetbrains.com/t/2026-2-is-coming-time-to-check-your-plugin-compatibility/4618
+    -->
+    <depends>com.intellij.modules.jcef</depends>
+
+    <idea-version since-build="261"/>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 声明式注册 Tool Window：用户点按钮时才调用 createToolWindowContent() -->
+        <toolWindow id="LionBox"
+                    anchor="right"
+                    secondary="true"
+                    factoryClass="com.lioncode.jetbrains.LionBoxToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

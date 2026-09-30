@@ -25,8 +25,13 @@ public class WorkspaceController {
      */
     @PostMapping
     public ApiResponse<WorkspaceManager.Workspace> registerWorkspace(@RequestBody RegisterRequest request) {
-        var workspace = workspaceManager.registerWorkspace(request.path());
-        return ApiResponse.ok("工作区注册成功", workspace);
+        try {
+            return ApiResponse.ok("工作区注册成功", workspaceManager.registerWorkspace(request.path()));
+        } catch (IllegalArgumentException e) {
+            // 路径为空/非法：以前会抛 NPE 或 InvalidPathException 变成 500，
+            // 而且 path="" 时 Path.of("") 等于当前进程工作目录，会静默注册一个用户没选过的工作区
+            return ApiResponse.error(e.getMessage());
+        }
     }
 
     /**
@@ -72,9 +77,19 @@ public class WorkspaceController {
     @PostMapping("/permission")
     public ApiResponse<WorkspaceManager.Workspace> setPermission(
             @RequestBody PermissionRequest request) {
+        // 【为什么要显式判 null】Enum.valueOf(null) 抛的是 NPE 而不是 IllegalArgumentException，
+        // 原来的 catch 拦不住；id 为 null 时 ConcurrentHashMap.get(null) 同样抛 NPE，
+        // 两种情况都会变成 500（前端只看到"服务器内部错误"）。
+        if (request == null || request.id() == null || request.id().isBlank()) {
+            return ApiResponse.error("缺少工作区 id");
+        }
+        if (request.permission() == null || request.permission().isBlank()) {
+            return ApiResponse.error("缺少权限等级（READ_ONLY / WORKSPACE_WRITE / FULL_ACCESS）");
+        }
         try {
             WorkspaceManager.WorkspacePermission permission =
-                WorkspaceManager.WorkspacePermission.valueOf(request.permission());
+                WorkspaceManager.WorkspacePermission.valueOf(
+                    request.permission().trim().toUpperCase(java.util.Locale.ROOT));
             if (workspaceManager.setPermission(request.id(), permission)) {
                 return ApiResponse.ok("权限已更新", workspaceManager.getWorkspace(request.id()).orElse(null));
             }

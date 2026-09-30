@@ -87,7 +87,25 @@
 ;         并排空子进程输出（原来输出一多子进程被管道堵死）；
 ;         fetch_url / http_get 带上 User-Agent、超时放宽、失败重试（fetch_url 超时的真因就是没 UA）；
 ;         execute_command 退出码非 0 但**有输出**时把话说清楚，git 的 128 给专门提示
-#define AppVersion     "1.4.2"
+; 1.5.0：**一切皆插件 + 技能通用格式 + @ 引用 + 两套配色 + 上下文压缩**（大版本）：
+;         ① 工具调用准确率：55 个工具的提示词改成"选择依据"并加了一张
+;            "用户会这么说 → 该用哪个工具"对照表；工具名归一化（ls/cat/bash/ls_directory…）；
+;            参数名归一化（file_path→path、max_depth→maxDepth…）；
+;            实测端到端首次选对率 43%→67%，合法率 100%；
+;         ② 插件系统：9 类插件（基础工具/进阶工具/技能/子智能体/终端/大循环/
+;            智能体团队/自动授权审查/自动化任务）、热插拔、插件开发模式（带脚手架）、
+;            设置里逐个开关（关掉的插件其工具直接从提示词消失）；
+;            新增 agent_spawn（派子智能体）与 agent_team_run（智能体团队）两个工具；
+;         ③ 技能：通用 SKILL.md 格式（YAML frontmatter + 正文），模型自己挑、用户可指定、
+;            内置四个（backend/client/document/frontend）随包发布；
+;         ④ @ 引用：对话里 @ 文件 / @ 历史对话 / @ 技能，输入框带补全浮层；
+;         ⑤ 两套配色（黑+灰 / 白+偏灰）在设置里切换，全部走 CSS 变量；
+;         ⑥ 上下文压缩：会话快超模型窗口时自动折叠中间历史成摘要，
+;            压完实测三个事实全记得（以前没有任何上下文管理，超了直接 400、会话永久废掉）；
+;         ⑦ 全代码审计 43 项发现（工作区沙箱相对路径绕过、事件/会话目录穿越、
+;            对话框挂死 HTTP 线程等），已修 34 项；
+;         ⑧ 发布形态：Electron 套壳桌面应用 + VS Code / JetBrains 插件脚手架
+#define AppVersion     "1.5.0"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
@@ -152,6 +170,10 @@ Source: "..\dist\使用说明.md";       DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\README-模型.md";    DestDir: "{app}"; Flags: ignoreversion
 ; 程序主体
 Source: "..\dist\lion-code-agent-harness-1.0.0-SNAPSHOT.jar"; DestDir: "{app}"; Flags: ignoreversion
+; 内置技能（SKILL.md 通用格式，四个：backend/client/document/frontend）
+; 【为什么必须随包发】技能不放进去，用户装完就只剩一个空技能列表 —— 代码里按
+; "jar 同级目录 / dist / 工作目录" 找 skills/，这里放到 {app}\skills 正好命中。
+Source: "..\dist\skills\*"; DestDir: "{app}\skills"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 模型运行时（llama.cpp）
 Source: "..\dist\runtime-vulkan\*"; DestDir: "{app}\runtime-vulkan"; Flags: ignoreversion recursesubdirs
 ; 随包自带的精简 JRE（约 52MB，jlink 生成）：有了它，用户机器上没装 Java 也能直接跑
@@ -205,6 +227,12 @@ var
   Stopper: String;
   Cmd: String;
 begin
+  // 【自动化/沙箱环境用】ISCC /DLIONBOX_SKIP_STOP_APPS 可以把"停掉正在运行的 LionBox"
+  // 这段跳过。为什么要留这个口子：这段会 Exec 起 powershell.exe 并**等到它退出**，
+  // 在无窗口的 CI/沙箱里子进程可能永远不返回，把整个静默安装挂在 PrepareToInstall。
+  // 发布的包**不加**这个开关（默认就是走下面这段真实逻辑），只有"验包脚本"用
+  // 带开关的副本去装，用来验证打包内容（文件、技能、JRE、jar 能不能起来）。
+  {$IFNDEF LIONBOX_SKIP_STOP_APPS}
   Stopper := ExpandConstant('{app}\stopper.ps1');
   if FileExists(Stopper) then
   begin
@@ -220,6 +248,7 @@ begin
          'Stop-Process -Force -ErrorAction SilentlyContinue"';
   Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(500);
+  {$ENDIF}
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

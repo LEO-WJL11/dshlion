@@ -26,21 +26,48 @@ public class WorkspaceManager {
 
     /**
      * 注册工作区（默认授予"工作区写"权限）
+     *
+     * <p>已经注册过的工作区**不覆盖它已有的权限等级**：
+     * 前端每次启动都会调 {@code GET /api/workspaces/default} 重新注册一遍默认工作区，
+     * 以前那会把用户手动设成"只读/全部权限"的工作区悄悄改回"工作区写"。
+     *
+     * <p>【null / 空白 / 非法路径】必须在这里就拦下并抛 IllegalArgumentException：
+     * 以前直接 {@code Path.of(path)} —— null 抛 NPE、非法字符抛 InvalidPathException，
+     * 两者都不是 IllegalArgumentException，控制器拦不住，用户看到的是 500；
+     * 而 {@code Path.of("")} 等于**当前进程工作目录**，会把用户根本没选过的目录静默注册成工作区。
      */
     public Workspace registerWorkspace(String path) {
+        String id = workspaceIdOf(path);
+        Workspace existing = workspaces.get(id);
+        if (existing != null) {
+            return existing;
+        }
         return registerWorkspace(path, WorkspacePermission.WORKSPACE_WRITE);
     }
 
     /**
      * 注册工作区并指定权限等级
+     *
+     * @throws IllegalArgumentException 路径为空或不是合法路径
      */
     public Workspace registerWorkspace(String path, WorkspacePermission permission) {
-        Path workspacePath = Path.of(path);
-        String id = workspacePath.toAbsolutePath().toString();
+        String id = workspaceIdOf(path);
         Workspace workspace = new Workspace(id, path, permission);
         workspaces.put(id, workspace);
         log.info("工作区已注册: {} (权限: {})", path, permission);
         return workspace;
+    }
+
+    /** 路径校验 + 归一化成工作区 ID（绝对路径） */
+    private static String workspaceIdOf(String path) {
+        if (path == null || path.isBlank()) {
+            throw new IllegalArgumentException("工作区路径不能为空");
+        }
+        try {
+            return Path.of(path).toAbsolutePath().toString();
+        } catch (java.nio.file.InvalidPathException e) {
+            throw new IllegalArgumentException("工作区路径非法: " + path);
+        }
     }
 
     /**

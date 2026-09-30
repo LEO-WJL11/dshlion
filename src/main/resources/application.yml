@@ -25,6 +25,9 @@ lion:
   # 工作区配置
   workspace:
     # 默认工作区路径（用户可覆盖）
+    # 【注意】这里的 ${user.home} 必须由 Spring **运行时**解析（JVM 系统属性），
+    # 不能被 Maven 的资源过滤在打包时替换掉 —— 见 pom.xml 里 resources 的 filtering=false。
+    # 一旦被替换，装到别人机器上就会去写"构建机"的家目录，持久化静默失败。
     default-path: ${user.home}/lion-code-workspace
     # 强制绑定工作区：未选择工作区不能创建会话
     force-bind: true

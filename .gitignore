@@ -116,3 +116,7 @@ dist/runtime-jre/
 # NOTE: the shipped installer in installer/release/ is deliberately force-added (git add -f).
 # Git cannot re-include files inside an ignored directory, so -f is required.
 # Rebuild: ISCC.exe installer\LionBox.iss  (keeps the path ignored for future builds)
+
+# Python ??
+__pycache__/
+*.pyc

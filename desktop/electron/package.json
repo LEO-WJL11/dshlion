@@ -1,0 +1,27 @@
+{
+  "name": "lionbox-desktop",
+  "productName": "LionBox",
+  "version": "0.1.0",
+  "description": "LionBox (Lion-Code Agent Harness) 桌面套壳：直接加载本地 8080 上的现有 Web UI，不重写界面",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "author": {
+    "name": "LionCode"
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

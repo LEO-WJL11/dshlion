@@ -1,5 +1,6 @@
 package com.lioncode.core.plugin.tool.shell;
 
+import com.lioncode.core.plugin.TerminalPlugin;
 import com.lioncode.core.plugin.tool.AbstractToolPlugin;
 import com.lioncode.core.plugin.tool.ToolResult;
 import org.slf4j.Logger;
@@ -23,9 +24,11 @@ public class ShellExecuteTool extends AbstractToolPlugin {
     private static final Logger log = LoggerFactory.getLogger(ShellExecuteTool.class);
 
     private final PersistentShell terminal;
+    private final TerminalPlugin terminalPlugin;
 
-    public ShellExecuteTool(PersistentShell terminal) {
+    public ShellExecuteTool(PersistentShell terminal, TerminalPlugin terminalPlugin) {
         this.terminal = terminal;
+        this.terminalPlugin = terminalPlugin;
     }
 
     @Override
@@ -118,7 +121,13 @@ public class ShellExecuteTool extends AbstractToolPlugin {
         try {
             String command = getRequiredStringArg(arguments, "command");
             String workdir = getStringArg(arguments, "workdir", null);
-            int timeout = getIntArg(arguments, "timeout", 300);
+
+            // 【谁说了算】模型给的 timeout 只是它的"期望"，用户在终端插件里设的上限是"规定"。
+            // 取小值 —— 否则模型随手写个 99999 就把用户设的限制绕过去了。
+            int requested = getIntArg(arguments, "timeout", 0);
+            int timeout = terminalPlugin.clampTimeout(requested);
+            // 输出上限同理：0 = 不限制（老行为），>0 时超出的部分直接在读取侧丢掉
+            int maxOutputBytes = terminalPlugin.maxOutputBytes();
 
             log.info("执行命令: {}", command);
 
@@ -152,7 +161,7 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             }
 
             String key = currentWorkspace() == null ? "default" : currentWorkspace();
-            PersistentShell.RunResult r = terminal.run(key, prepared, dir, timeout);
+            PersistentShell.RunResult r = terminal.run(key, prepared, dir, timeout, maxOutputBytes);
 
             if (r.errorText() != null) {
                 return error(r.errorText());
@@ -163,6 +172,14 @@ public class ShellExecuteTool extends AbstractToolPlugin {
                 sb.append("输出:\n").append(r.output()).append("\n");
             } else {
                 sb.append("（这条命令没有输出）\n");
+            }
+            // 【必须明确告诉模型"被截断了"】不提示的话它会把"没看到"当成"不存在"，
+            // 然后基于不完整的信息下结论（"日志里没有报错"）。说清了它才知道换个更精确的查法。
+            if (r.truncated()) {
+                sb.append("⚠ 输出已截断：这条命令的输出超过了终端设置的上限（").append(maxOutputBytes)
+                  .append(" 字节），后面的内容没有带回来。要看全就用更精确的命令")
+                  .append("（例如 Select-String 过滤、Get-Content -TotalCount 只看前几行），")
+                  .append("或在设置 → 插件 → 终端里调大「最大输出字节数」。\n");
             }
             if (r.cwd() != null) {
                 sb.append("当前目录: ").append(r.cwd()).append("\n");

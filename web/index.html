@@ -1,127 +1,243 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LionBox - 本地 AI 编程助手</title>
     <style>
+        /* =====================================================================
+           配色：全部走 CSS 变量，只有下面两块定义颜色值，组件样式一律用 var(--x)。
+           两套主题 —— data-theme="dark"（黑 + 灰）/ data-theme="light"（白 + 浅灰），
+           挂在 <html> 上，由 App.setTheme() 切换（设置 → 界面）。
+           ===================================================================== */
+        :root, html[data-theme="dark"] {
+            --bg: #0d0e10;            /* 页面底：近黑，不用纯黑（纯黑显脏、发闷） */
+            --panel: #17191c;         /* 面板：侧栏 / 顶栏 / 输入区 */
+            --panel-2: #1e2126;       /* 卡片 / 气泡 / 输入框 */
+            --inset: #101214;         /* 更深一层的凹槽（代码块、进度条槽） */
+            --hover: #24272c;         /* 悬停 / 选中的底 */
+            --border: #2a2d31;        /* 主边框 */
+            --border-soft: #212429;   /* 次级边框、分隔线 */
+            --text: #e4e6e8;          /* 主文字 */
+            --text-dim: #a3a8ae;      /* 次要文字 */
+            --text-mute: #787e85;     /* 弱化文字（提示、路径） */
+            --accent: #6f7f95;        /* 强调色：低饱和灰蓝 */
+            --accent-hover: #8091a7;
+            --accent-soft: #9fb0c4;   /* 强调色的浅版（图标、次要标记） */
+            --accent-fg: #f6f7f9;     /* 压在强调色上的文字 */
+            --info: #8fa6bf;          /* 中性信息（工具调用行） */
+            --ok: #5f9e7f;            /* 成功 */
+            --warn: #c2a05a;          /* 进行中 / 提醒 */
+            --err: #c06a5c;           /* 失败 */
+            --err-text: #dfa294;      /* 失败块里的文字 */
+            --err-bg: #221a18;        /* 失败块底 */
+            --ok-bg: #14201a;         /* 成功块底 */
+            --scroll: #33373d;        /* 滚动条 */
+            --code-bg: rgba(255,255,255,.07);
+            --mask: rgba(0,0,0,.62);  /* 模态遮罩 */
+            --shadow: rgba(0,0,0,.45);
+            --sw-dark: #0d0e10;       /* 主题卡上的小色块（要显示的就是那套配色本身） */
+            --sw-light: #fafafa;
+        }
+
+        html[data-theme="light"] {
+            --bg: #fafafa;
+            --panel: #f2f3f5;
+            --panel-2: #ffffff;
+            --inset: #eceef1;
+            --hover: #e7eaee;
+            --border: #dcdee2;
+            --border-soft: #e6e8ec;
+            --text: #1b1d20;
+            --text-dim: #5c6167;
+            --text-mute: #8b9096;
+            --accent: #5b6b80;
+            --accent-hover: #4b5a6d;
+            --accent-soft: #7d8ea3;
+            --accent-fg: #ffffff;
+            --info: #4a6b8a;
+            --ok: #3f7d5f;
+            --warn: #8a6a1f;
+            --err: #a9503f;
+            --err-text: #8c4433;
+            --err-bg: #f7ece9;
+            --ok-bg: #eaf3ee;
+            --scroll: #c6cad0;
+            --code-bg: rgba(0,0,0,.06);
+            --mask: rgba(20,22,26,.38);
+            --shadow: rgba(20,22,26,.18);
+            --sw-dark: #0d0e10;
+            --sw-light: #fafafa;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: #e8e8f0; background: #1a1a2e; }
+        html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; color: var(--text); background: var(--bg); }
         #app { display: flex; height: 100vh; overflow: hidden; }
         
         /* 侧边栏 */
-        .sidebar { width: 280px; background: #16213e; border-right: 1px solid #2d2d4a; display: flex; flex-direction: column; }
-        .sidebar-header { padding: 16px; border-bottom: 1px solid #2d2d4a; }
+        .sidebar { width: 280px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); }
         .logo { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
         .logo-icon { font-size: 28px; }
         .logo-text { font-size: 18px; font-weight: 700; }
-        .sidebar-section { padding: 16px; border-bottom: 1px solid #252540; }
-        .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #6a6a80; margin-bottom: 8px; letter-spacing: 0.5px; }
-        .workspace-info { display: flex; align-items: center; justify-content: space-between; padding: 8px; background: #1e1e3a; border-radius: 8px; border: 1px solid #2d2d4a; }
-        .workspace-path { font-size: 12px; color: #a0a0b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+        .sidebar-section { padding: 16px; border-bottom: 1px solid var(--border-soft); }
+        .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-mute); margin-bottom: 8px; letter-spacing: 0.5px; }
+        .workspace-info { display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--panel-2); border-radius: 8px; border: 1px solid var(--border); }
+        .workspace-path { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
         .session-list { max-height: 300px; overflow-y: auto; }
 
         /* ---- 按工作区分组的"选项卡" ---- */
         .session-list { max-height: 46vh; overflow-y: auto; }
-        .ws-tab { margin-bottom: 6px; border-radius: 8px; background: #1b1b2b; overflow: hidden; }
+        .ws-tab { margin-bottom: 6px; border-radius: 8px; background: var(--panel-2); overflow: hidden; }
         .ws-tab-head { display: flex; align-items: center; gap: 6px; padding: 7px 8px;
                        cursor: pointer; user-select: none; }
-        .ws-tab-head:hover { background: #23233a; }
-        .ws-tab-head.current { box-shadow: inset 3px 0 0 #6c5ce7; }
-        .ws-caret { width: 12px; font-size: 10px; color: #a0a0b8; }
-        .ws-name { flex: 1; font-size: 12.5px; color: #e8e8f0; overflow: hidden;
+        .ws-tab-head:hover { background: var(--border-soft); }
+        .ws-tab-head.current { box-shadow: inset 3px 0 0 var(--accent); }
+        .ws-caret { width: 12px; font-size: 10px; color: var(--text-dim); }
+        .ws-name { flex: 1; font-size: 12.5px; color: var(--text); overflow: hidden;
                    text-overflow: ellipsis; white-space: nowrap; }
-        .ws-count { font-size: 10.5px; color: #a0a0b8; background: #2d2d4a;
+        .ws-count { font-size: 10.5px; color: var(--text-dim); background: var(--border);
                     border-radius: 8px; padding: 1px 6px; }
-        .ws-add { border: 0; background: transparent; color: #a0a0b8; cursor: pointer;
+        .ws-add { border: 0; background: transparent; color: var(--text-dim); cursor: pointer;
                   font-size: 14px; line-height: 1; padding: 2px 4px; }
-        .ws-add:hover { color: #74b9ff; }
+        .ws-add:hover { color: var(--info); }
         .ws-body { padding: 2px 4px 6px 4px; }
         .ws-body .session-item { padding: 6px 6px 6px 8px; }
-        .ws-empty { font-size: 11px; color: #6a6a80; padding: 4px 10px 8px; }
-        .ws-pick { margin-left: 4px; background: #23233a; color: #a0a0b8; border: 1px solid #2d2d4a;
+        .ws-empty { font-size: 11px; color: var(--text-mute); padding: 4px 10px 8px; }
+        .ws-pick { margin-left: 4px; background: var(--border-soft); color: var(--text-dim); border: 1px solid var(--border);
                    border-radius: 5px; font-size: 10.5px; padding: 1px 3px; max-width: 112px; }
-        .ws-pick:hover { color: #e8e8f0; }
-        #clearAllSessions:hover { color: #e17055; }
+        .ws-pick:hover { color: var(--text); }
+        #clearAllSessions:hover { color: var(--err); }
         #clearAllSessions:disabled { opacity: .4; cursor: default; }
         .session-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; margin-bottom: 4px; border-radius: 8px; cursor: pointer; }
-        .session-item:hover { background: #2a2a4a; }
-        .session-item.active { background: #6c5ce7; color: white; }
-        .session-item .del-btn { opacity: 0; background: none; border: none; color: #e17055; cursor: pointer; font-size: 16px; }
+        .session-item:hover { background: var(--hover); }
+        .session-item.active { background: var(--accent); color: var(--accent-fg); }
+        .session-item .del-btn { opacity: 0; background: none; border: none; color: var(--err); cursor: pointer; font-size: 16px; }
         .session-item:hover .del-btn { opacity: 1; }
         .mode-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-        .mode-btn { padding: 8px; background: #1e1e3a; border: 1px solid #2d2d4a; border-radius: 8px; color: #a0a0b8; font-size: 12px; cursor: pointer; }
-        .mode-btn:hover { background: #2a2a4a; }
-        .mode-btn.active { background: #6c5ce7; border-color: #6c5ce7; color: white; }
-        .sidebar-footer { margin-top: auto; padding: 16px; border-top: 1px solid #2d2d4a; }
+        .mode-btn { padding: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+        .mode-btn:hover { background: var(--hover); }
+        .mode-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+        .sidebar-footer { margin-top: auto; padding: 16px; border-top: 1px solid var(--border); }
         
         /* 主内容 */
         .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .top-bar { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #16213e; border-bottom: 1px solid #2d2d4a; }
+        .top-bar { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
         .top-bar-left { display: flex; align-items: center; gap: 12px; }
-        .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a0a0b8; }
-        .breadcrumb .sep { color: #6a6a80; }
+        .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
+        .breadcrumb .sep { color: var(--text-mute); }
         .top-bar-right { display: flex; align-items: center; gap: 12px; }
-        .adapter-dot { width: 8px; height: 8px; border-radius: 50%; background: #00b894; display: inline-block; }
-        select { padding: 6px 12px; background: #1e1e3a; border: 1px solid #2d2d4a; border-radius: 8px; color: #e8e8f0; font-size: 13px; min-width: 100px; }
-        select:focus { outline: none; border-color: #6c5ce7; }
+        .adapter-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+        select { padding: 6px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; min-width: 100px; }
+        select:focus { outline: none; border-color: var(--accent); }
         
         /* 消息区 */
         .message-area { flex: 1; overflow-y: auto; padding: 24px; scroll-behavior: smooth; }
         .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; text-align: center; }
         .welcome-icon { font-size: 64px; margin-bottom: 16px; }
-        .welcome h1 { font-size: 28px; margin-bottom: 8px; background: linear-gradient(135deg, #6c5ce7, #a29bfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .welcome p { color: #a0a0b8; margin-bottom: 24px; }
+        .welcome h1 { font-size: 28px; margin-bottom: 8px; background: linear-gradient(135deg, var(--accent), var(--accent-soft)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .welcome p { color: var(--text-dim); margin-bottom: 24px; }
         .features { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 500px; }
-        .feature { padding: 16px; background: #1e1e3a; border: 1px solid #2d2d4a; border-radius: 12px; }
-        .feature:hover { border-color: #6c5ce7; }
+        .feature { padding: 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; }
+        .feature:hover { border-color: var(--accent); }
         .feature .fi { font-size: 24px; }
         .feature .ft { font-size: 13px; font-weight: 600; }
-        .feature .fd { font-size: 11px; color: #a0a0b8; }
+        .feature .fd { font-size: 11px; color: var(--text-dim); }
         
         /* 消息气泡 */
         .msg { display: flex; gap: 12px; margin-bottom: 16px; max-width: 800px; margin-left: auto; margin-right: auto; }
         .msg.user { flex-direction: row-reverse; }
         .msg-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
-        .msg.user .msg-avatar { background: #6c5ce7; }
-        .msg.bot .msg-avatar { background: #a29bfe; }
+        .msg.user .msg-avatar { background: var(--accent); }
+        .msg.bot .msg-avatar { background: var(--accent-soft); }
         .msg-body { padding: 12px 16px; border-radius: 12px; line-height: 1.6; max-width: 700px; }
-        .msg.user .msg-body { background: #6c5ce7; color: white; border-bottom-right-radius: 4px; }
-        .msg.bot .msg-body { background: #1e1e3a; border: 1px solid #2d2d4a; border-bottom-left-radius: 4px; }
-        .msg-body pre { background: #1a1a2e; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; font-family: monospace; font-size: 13px; }
-        .msg-body code { font-family: monospace; font-size: 13px; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px; }
+        .msg.user .msg-body { background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
+        .msg.bot .msg-body { background: var(--panel-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+        .msg-body pre { background: var(--inset); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; font-family: monospace; font-size: 13px; }
+        .msg-body code { font-family: monospace; font-size: 13px; background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
         
         /* 输入区 */
-        .input-area { padding: 12px 24px; background: #16213e; border-top: 1px solid #2d2d4a; }
+        .input-area { padding: 12px 24px; background: var(--panel); border-top: 1px solid var(--border); }
         .input-row { display: flex; align-items: flex-end; gap: 8px; max-width: 800px; margin: 0 auto; }
-        .input-row textarea { flex: 1; padding: 12px; background: #1e1e3a; border: 1px solid #2d2d4a; border-radius: 12px; color: #e8e8f0; font-family: inherit; font-size: 14px; resize: none; min-height: 44px; max-height: 200px; }
-        .input-row textarea:focus { outline: none; border-color: #6c5ce7; }
-        .input-hints { display: flex; justify-content: space-between; max-width: 800px; margin: 6px auto 0; font-size: 12px; color: #6a6a80; }
+        .input-row textarea { flex: 1; padding: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-family: inherit; font-size: 14px; resize: none; min-height: 44px; max-height: 200px; }
+        .input-row textarea:focus { outline: none; border-color: var(--accent); }
+        .input-hints { display: flex; justify-content: space-between; max-width: 800px; margin: 6px auto 0; font-size: 12px; color: var(--text-mute); }
         
         /* 按钮通用 */
         .btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 14px; border: 1px solid transparent; border-radius: 8px; font-family: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-primary { background: #6c5ce7; color: white; border-color: #6c5ce7; }
-        .btn-primary:hover:not(:disabled) { background: #5a4bd6; }
-        .btn-ghost { background: transparent; color: #a0a0b8; border-color: #2d2d4a; }
-        .btn-ghost:hover:not(:disabled) { background: #2a2a4a; color: #e8e8f0; }
+        .btn-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn-ghost { background: transparent; color: var(--text-dim); border-color: var(--border); }
+        .btn-ghost:hover:not(:disabled) { background: var(--hover); color: var(--text); }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
         .btn-icon { width: 36px; height: 36px; padding: 0; }
         .btn-send { width: 44px; height: 44px; border-radius: 50%; font-size: 18px; flex-shrink: 0; }
         
         /* 模态框 */
-        .modal-mask { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 9000; display: none; }
+        .modal-mask { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--mask); z-index: 9000; display: none; }
         .modal-mask.show { display: flex; align-items: center; justify-content: center; }
-        .modal-box { background: #1e1e3a; border: 1px solid #2d2d4a; border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; display: flex; flex-direction: column; z-index: 9001; }
-        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #2d2d4a; }
+        .modal-box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; display: flex; flex-direction: column; z-index: 9001; }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
         .modal-head h2 { font-size: 16px; }
-        .modal-head .close { background: none; border: none; color: #a0a0b8; font-size: 22px; cursor: pointer; }
+        .modal-head .close { background: none; border: none; color: var(--text-dim); font-size: 22px; cursor: pointer; }
         .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
         
         /* 滚动条 */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #3d3d5a; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
+        /* ================= 设置面板：区块 / 行 / 开关 ================= */
+        .set-block { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; background: var(--panel-2); }
+        .set-block-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .set-block-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+        .set-note { font-size: 11.5px; color: var(--text-mute); line-height: 1.7; }
+        .set-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; margin-bottom: 6px; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px; }
+        .set-row .grow { flex: 1; min-width: 0; }
+        .set-name { display: block; font-size: 13px; color: var(--text); }
+        .set-desc { display: block; font-size: 11px; color: var(--text-mute); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; }
+        .set-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--text-dim); white-space: nowrap; }
+        .set-err { display: block; font-size: 11px; color: var(--err); margin-top: 3px; }
+        .set-group-title { font-size: 11.5px; color: var(--text-dim); margin: 12px 0 6px; letter-spacing: .5px; }
+        .set-input { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; box-sizing: border-box; }
+        .set-msg { font-size: 12px; color: var(--text-mute); }
+        .set-msg.ok { color: var(--ok); }
+        .set-msg.err { color: var(--err); }
+
+        /* 开关：checkbox 伪装成滑块 */
+        .switch { position: relative; display: inline-block; width: 38px; height: 20px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; margin: 0; }
+        .switch .knob { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background: var(--hover); border: 1px solid var(--border); border-radius: 999px; transition: background .15s, border-color .15s; cursor: pointer; }
+        .switch .knob::after { content: ''; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px; border-radius: 50%; background: var(--text-mute); transition: transform .15s, background .15s; }
+        .switch input:checked + .knob { background: var(--accent); border-color: var(--accent); }
+        .switch input:checked + .knob::after { transform: translateX(17px); background: var(--accent-fg); }
+        .switch input:disabled + .knob { opacity: .5; cursor: default; }
+
+        /* 技能 / 引用的小标签 */
+        .tag { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; margin: 0 6px 6px 0; font-size: 11.5px; background: var(--hover); border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+        .tag button { background: none; border: 0; color: var(--text-mute); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 1px; }
+        .tag button:hover { color: var(--err); }
+
+        /* 主题卡（设置 → 界面） */
+        .theme-card { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px; margin-bottom: 8px; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px; cursor: pointer; color: var(--text); font-family: inherit; }
+        .theme-card:hover { border-color: var(--accent); }
+        .theme-card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+        .theme-swatch { width: 34px; height: 24px; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; }
+        .theme-check { color: var(--accent); font-size: 14px; width: 14px; flex-shrink: 0; }
+
+        /* ================= 输入框：@ 引用标签 + 候选浮层 ================= */
+        .input-row { position: relative; }
+        .ref-bar { max-width: 800px; margin: 0 auto 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .ref-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px; font-size: 11.5px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); }
+        .ref-chip .t { color: var(--text); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+        .ref-chip button { background: none; border: 0; color: var(--text-mute); cursor: pointer; font-size: 13px; line-height: 1; }
+        .ref-chip button:hover { color: var(--err); }
+        .mention-popup { position: absolute; left: 0; right: 56px; bottom: calc(100% + 6px); max-height: 260px; overflow-y: auto; padding: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px var(--shadow); z-index: 8000; }
+        .mention-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px; cursor: pointer; }
+        .mention-item.active { background: var(--hover); }
+        .mention-item .mi-type { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--hover); color: var(--text-dim); flex-shrink: 0; }
+        .mention-item .mi-label { font-size: 12.5px; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mention-item .mi-detail { font-size: 11px; color: var(--text-mute); flex-shrink: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mention-empty { padding: 8px 10px; font-size: 11.5px; color: var(--text-mute); }
     </style>
 </head>
 <body>
@@ -141,11 +257,11 @@
         </div>
         <div class="sidebar-section">
             <div class="section-title" style="display:flex;align-items:center;justify-content:space-between">
-                <span>对话（按工作区分组）<span id="sessionTotal" style="color:#6a6a80;font-weight:400"></span></span>
+                <span>对话（按工作区分组）<span id="sessionTotal" style="color:var(--text-mute);font-weight:400"></span></span>
                 <button class="ws-add" id="clearAllSessions" title="删除所有对话（工作区保留）"
                         style="font-size:11.5px" onclick="App.deleteAllSessions()">🗑 清空</button>
             </div>
-            <div class="session-list" id="sessionList"><div style="text-align:center;color:#6a6a80;padding:20px">暂无会话</div></div>
+            <div class="session-list" id="sessionList"><div style="text-align:center;color:var(--text-mute);padding:20px">暂无会话</div></div>
         </div>
         <div class="sidebar-section">
             <div class="section-title">工作模式</div>
@@ -156,7 +272,7 @@
         </div>
         <div class="sidebar-footer">
             <button class="btn btn-ghost" style="width:100%;margin-bottom:6px" onclick="App.showSettings()">⚙️ 设置</button>
-            <button class="btn btn-ghost" style="width:100%" onclick="App.showPlugins()">🧩 插件管理</button>
+            <button class="btn btn-ghost" style="width:100%" onclick="App.showPlugins()">🧩 插件 / 技能</button>
         </div>
     </aside>
 
@@ -169,29 +285,29 @@
             </div>
             <div class="top-bar-right">
                 <span id="runtimeBanner" onclick="App.showSettings()" title="点这里切换模型来源"
-                      style="font-size:12px;color:#a0a0b8;margin-right:4px;cursor:pointer;
-                             padding:3px 8px;border:1px solid #2d2d4a;border-radius:6px"></span>
-                <span style="font-size:12px;color:#a0a0b8" title="接口调用格式"><span class="adapter-dot"></span> <span id="adapterName">就绪</span></span>
+                      style="font-size:12px;color:var(--text-dim);margin-right:4px;cursor:pointer;
+                             padding:3px 8px;border:1px solid var(--border);border-radius:6px"></span>
+                <span style="font-size:12px;color:var(--text-dim)" title="接口调用格式"><span class="adapter-dot"></span> <span id="adapterName">就绪</span></span>
                 <select id="modelSelect" onchange="App.onModelChange()"><option value="">选择模型...</option></select>
                 <select id="thinkingLevel" disabled><option>选择模型后加载</option></select>
             </div>
         </header>
 
         <!-- 模型下载进度：前台可见（这是"下 5 GB 时到底在干嘛"的唯一答案） -->
-        <div id="dlBar" style="display:none;padding:8px 16px;background:#1a1a2e;
-             border-bottom:1px solid #2d2d4a">
+        <div id="dlBar" style="display:none;padding:8px 16px;background:var(--panel-2);
+             border-bottom:1px solid var(--border)">
             <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;
-                 color:#e8e8f0;max-width:1100px;margin:0 auto">
+                 color:var(--text);max-width:1100px;margin:0 auto">
                 <span id="dlIcon">⏳</span>
-                <span id="dlText" style="white-space:nowrap;color:#e8e8f0">正在下载模型…</span>
-                <div style="flex:1;height:9px;background:#12121f;border:1px solid #2d2d4a;
+                <span id="dlText" style="white-space:nowrap;color:var(--text)">正在下载模型…</span>
+                <div style="flex:1;height:9px;background:var(--inset);border:1px solid var(--border);
                      border-radius:5px;overflow:hidden;min-width:120px">
                     <div id="dlFill" style="height:100%;width:0%;
-                         background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div>
+                         background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .4s"></div>
                 </div>
-                <span id="dlPct" style="width:46px;text-align:right;color:#fdcb6e;
+                <span id="dlPct" style="width:46px;text-align:right;color:var(--warn);
                      font-variant-numeric:tabular-nums">0%</span>
-                <span id="dlSpeed" style="color:#6a6a80;min-width:150px"></span>
+                <span id="dlSpeed" style="color:var(--text-mute);min-width:150px"></span>
             </div>
         </div>
 
@@ -199,9 +315,9 @@
             <div class="welcome">
                 <div class="welcome-icon">🦁</div>
                 <h1>LionBox</h1>
-                <p>本地 AI 编程助手 · 51个插件 · 流式执行 · 模型完全本地运行</p>
+                <p>本地 AI 编程助手 · <span id="welcomePluginCount">插件</span> · 流式执行 · 模型完全本地运行</p>
                 <div class="features">
-                    <div class="feature"><div class="fi">🔧</div><div class="ft">51个插件</div><div class="fd">4 Skill + 47 Tool</div></div>
+                    <div class="feature"><div class="fi">🔧</div><div class="ft" id="welcomePluginCount2">插件</div><div class="fd" id="welcomePluginDetail">工具 + 技能</div></div>
                     <div class="feature"><div class="fi">⚡</div><div class="ft">流式执行</div><div class="fd">识别即调度</div></div>
                     <div class="feature"><div class="fi">📦</div><div class="ft">本地推理</div><div class="fd">无需联网 · 无需API Key</div></div>
                     <div class="feature"><div class="fi">📝</div><div class="ft">事件溯源</div><div class="fd">完整记录回放</div></div>
@@ -212,32 +328,36 @@
         <div class="input-area">
             <!-- 本地模型：前台常驻（挑版本、下载、看进度都在这儿，不用翻设置） -->
             <div id="modelPanel" style="max-width:1100px;margin:0 auto 8px;padding:8px 12px;
-                 background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;
-                 font-size:12.5px;color:#a0a0b8"></div>
+                 background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+                 font-size:12.5px;color:var(--text-dim)"></div>
 
             <!-- 模型提问面板：ask_user 工具调用时弹出，用户答完自动收起 -->
             <div id="askUserPanel" style="display:none;max-width:800px;margin:0 auto 10px;
-                 background:#1a1a2e;border:1px solid #6c5ce7;border-radius:8px;padding:12px 14px">
-                <div style="font-size:12px;color:#a29bfe;margin-bottom:6px">🤖 模型需要你确认</div>
-                <div id="askUserText" style="font-size:14px;color:#e8e8f0;line-height:1.7;
+                 background:var(--panel-2);border:1px solid var(--accent);border-radius:8px;padding:12px 14px">
+                <div style="font-size:12px;color:var(--accent-soft);margin-bottom:6px">🤖 模型需要你确认</div>
+                <div id="askUserText" style="font-size:14px;color:var(--text);line-height:1.7;
                      margin-bottom:10px;white-space:pre-wrap"></div>
                 <div id="askUserOptions" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
                 <div style="display:flex;gap:8px;align-items:center">
                     <input id="askUserInput" placeholder="输入你的回答…"
-                           style="flex:1;padding:7px 12px;background:#12121f;border:1px solid #2d2d4a;
-                                  border-radius:6px;color:#e8e8f0;font-size:13px;box-sizing:border-box"
+                           style="flex:1;padding:7px 12px;background:var(--inset);border:1px solid var(--border);
+                                  border-radius:6px;color:var(--text);font-size:13px;box-sizing:border-box"
                            onkeydown="if(event.key==='Enter'){event.preventDefault();App.submitAskUser();}">
                     <button class="btn btn-primary btn-sm" onclick="App.submitAskUser()">提交回答</button>
                 </div>
-                <div id="askUserHint" style="font-size:11px;color:#6a6a80;margin-top:8px"></div>
+                <div id="askUserHint" style="font-size:11px;color:var(--text-mute);margin-top:8px"></div>
             </div>
             <div id="agentControls" style="display:none;max-width:800px;margin:0 auto 8px;align-items:center;gap:8px">
                 <button class="btn btn-ghost btn-sm" id="btnPause" onclick="App.togglePause()">⏸ 暂停</button>
-                <button class="btn btn-ghost btn-sm" onclick="App.stopAgent()" style="color:#e17055;border-color:#e17055">⏹ 停止</button>
-                <span id="agentStateHint" style="font-size:12px;color:#6a6a80">运行中…</span>
+                <button class="btn btn-ghost btn-sm" onclick="App.stopAgent()" style="color:var(--err);border-color:var(--err)">⏹ 停止</button>
+                <span id="agentStateHint" style="font-size:12px;color:var(--text-mute)">运行中…</span>
             </div>
+            <!-- 引用了哪些文件 / 历史对话 / 技能：一眼看到，点 × 就能删 -->
+            <div id="refBar" class="ref-bar" style="display:none"></div>
             <div class="input-row">
-                <textarea id="msgInput" placeholder="输入消息... (Shift+Enter换行，Enter发送)" rows="1"></textarea>
+                <!-- @ 补全候选浮层：输入 @ 后弹在输入框正上方 -->
+                <div id="mentionPopup" class="mention-popup" style="display:none"></div>
+                <textarea id="msgInput" placeholder="输入消息... (Shift+Enter换行，Enter发送，@ 引用文件/历史/技能)" rows="1"></textarea>
                 <button class="btn btn-primary btn-send" id="sendBtn" onclick="App.send()">➤</button>
             </div>
             <div class="input-hints">
@@ -260,6 +380,21 @@
 </div>
 
 <script>
+// ===== 主题引导：尽量早挂上 data-theme，刷新时不会先闪一下另一套配色 =====
+(function() {
+    try {
+        var saved = localStorage.getItem('lionbox.theme') || 'auto';
+        var light = false;
+        try {
+            light = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        } catch (e2) { /* 没有 matchMedia 就当暗色 */ }
+        var eff = (saved === 'dark' || saved === 'light') ? saved : (light ? 'light' : 'dark');
+        if (document.documentElement && document.documentElement.setAttribute) {
+            document.documentElement.setAttribute('data-theme', eff);
+        }
+    } catch (e) { /* 读不出来就用 <html> 上的默认值（暗色） */ }
+})();
+
 var App = {
     ws: null,
     mode: 'STANDARD',
@@ -278,18 +413,43 @@ var App = {
     savedModel: '',
     savedThinkingLevel: '',
     pickingWs: false,
+    // 界面主题：'auto' 跟随系统 / 'dark' 黑灰 / 'light' 白灰
+    themePref: 'auto',
+    themeEffective: 'dark',
+    currentSettingsTab: 'appearance',
+    // 设置面板用到的数据（插件 / 技能）
+    pluginsData: [],
+    pluginKinds: [],
+    pluginDevMode: false,
+    pluginsDir: '',
+    skillsData: [],
+    activeSkills: [],
+    // @ 补全与引用标签
+    _refs: [],
+    _mentionItems: [],
+    _mentionIndex: 0,
+    _mentionOpen: false,
+    _mentionSeq: 0,
 
     init: function() {
         var self = this;
-        // 回车发送
-        document.getElementById('msgInput').onkeydown = function(e) {
+        // 主题：先把上次选的那套挂上（颜色全是 CSS 变量，换主题不用刷新）
+        this.initTheme();
+
+        var input = document.getElementById('msgInput');
+        // 回车发送；@ 候选浮层开着时，按键先给浮层用（↑↓ 选、Enter/Tab 确认、Esc 关）
+        input.onkeydown = function(e) {
+            if (self.mentionKeydown(e)) { return; }
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); self.send(); }
         };
-        // 自动高度
-        document.getElementById('msgInput').oninput = function() {
+        // 自动高度 + @ 补全 + 引用标签
+        input.oninput = function() {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+            self.onInputChanged();
         };
+        // 失焦收起浮层（候选项用 mousedown 选，不会被这里抢先）
+        input.onblur = function() { self.hideMentionPopup(); };
         // 自动初始化：创建工作区+会话
         this.autoInit();
     },
@@ -451,18 +611,18 @@ var App = {
         var self = this;
         var render = function(commonPaths) {
             var icons = {'桌面':'🖥️', '文档':'📄', '下载':'📥', '图片':'🖼️', '用户目录':'🏠'};
-            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选择常用目录或手动输入路径：</p>';
+            var html = '<p style="color:var(--text-dim);margin-bottom:16px">选择常用目录或手动输入路径：</p>';
             html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
             Object.keys(commonPaths).forEach(function(name) {
                 var p = commonPaths[name];
                 if (!p) return;
                 var esc = p.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                html += '<button onclick="App.selectWs(\'' + esc + '\')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px;color:#e8e8f0;cursor:pointer;font-size:13px;text-align:left">';
+                html += '<button onclick="App.selectWs(\'' + esc + '\')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:13px;text-align:left">';
                 html += '<span style="font-size:18px">' + (icons[name] || '📁') + '</span><span style="flex:1">' + name + '</span>';
-                html += '<span style="font-size:11px;color:#6a6a80;font-family:monospace">' + p + '</span></button>';
+                html += '<span style="font-size:11px;color:var(--text-mute);font-family:monospace">' + p + '</span></button>';
             });
             html += '</div>';
-            html += '<div style="display:flex;gap:8px"><input id="customWsPath" style="flex:1;padding:8px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-family:monospace;font-size:13px" placeholder="输入自定义路径，如 D:\\my-project">';
+            html += '<div style="display:flex;gap:8px"><input id="customWsPath" style="flex:1;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:13px" placeholder="输入自定义路径，如 D:\\my-project">';
             html += '<button class="btn btn-primary" onclick="App.selectWs(document.getElementById(\'customWsPath\').value)">确定</button></div>';
             self.openModal('选择工作区', html);
         };
@@ -579,7 +739,7 @@ var App = {
             if (callback) callback(sessions);
         }).catch(function() {
             var list = document.getElementById('sessionList');
-            if (list) list.innerHTML = '<div style="text-align:center;color:#e17055;padding:16px">对话列表加载失败</div>';
+            if (list) list.innerHTML = '<div style="text-align:center;color:var(--err);padding:16px">对话列表加载失败</div>';
             if (callback) callback([]);
         });
     },
@@ -608,7 +768,7 @@ var App = {
                 // 当前对话已经不存在了：清干净界面上的消息区
                 self.sessionId = null;
                 var box = document.getElementById('messages');
-                if (box) box.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:40px">'
+                if (box) box.innerHTML = '<div style="text-align:center;color:var(--text-mute);padding:40px">'
                     + '对话已清空，点「＋ 新建对话」开始</div>';
                 var bc = document.getElementById('bcSession');
                 if (bc) bc.textContent = '未选择对话';
@@ -719,7 +879,7 @@ var App = {
 
         if (!order.length) {
             // 一个对话都没有时，不列任何工作区（含以前用过、现在空的）
-            list.innerHTML = '<div style="text-align:center;color:#6a6a80;padding:20px">还没有对话<br>' +
+            list.innerHTML = '<div style="text-align:center;color:var(--text-mute);padding:20px">还没有对话<br>' +
                 '<span style="font-size:11px">点上面「选择」挑个工作区，或直接「＋ 新建对话」</span></div>';
             return;
         }
@@ -747,7 +907,7 @@ var App = {
                     var unnamed = !(s.name && s.name.trim());
                     html += '<div class="session-item' + active + '"'
                          +      ' onclick="App.switchSession(\'' + s.sessionId + '\')">'
-                         +   '<span class="s-name" style="' + (unnamed ? 'color:#6a6a80' : '') + '"'
+                         +   '<span class="s-name" style="' + (unnamed ? 'color:var(--text-mute)' : '') + '"'
                          +         ' title="双击重命名"'
                          +         ' ondblclick="event.stopPropagation();App.renameSession(\'' + s.sessionId + '\')">'
                          +     self.escapeHtml(self.sessionLabel(s)) + '</span>'
@@ -872,7 +1032,7 @@ var App = {
                     (m.toolCalls || []).forEach(function(t) {
                         if (!t || !t.name) { return; }
                         self.appendMsg('bot',
-                            '<span style="font-size:12px;color:#74b9ff">🔧 调用工具：<b>'
+                            '<span style="font-size:12px;color:var(--info)">🔧 调用工具：<b>'
                             + self.escapeHtml(t.name) + '</b> …</span>', true);
                     });
                 } else if (m.role === 'tool') {
@@ -880,7 +1040,7 @@ var App = {
                     var bad = body.indexOf('工具执行错误') >= 0 || body.indexOf('执行异常') >= 0
                               || body.indexOf('失败') === 0;
                     self.appendMsg('bot', '<span style="font-size:12px;color:'
-                        + (bad ? '#e17055' : '#00b894') + '">' + (bad ? '❌ ' : '✅ ')
+                        + (bad ? 'var(--err)' : 'var(--ok)') + '">' + (bad ? '❌ ' : '✅ ')
                         + self.escapeHtml(m.toolName || '') + (bad ? ' 失败' : ' 完成') + '</span>', true);
                 }
                 // system消息不显示
@@ -935,8 +1095,10 @@ var App = {
         this.appendMsg('user', msg);
         input.value = '';
         input.style.height = 'auto';
+        this.hideMentionPopup();
+        this.renderRefs();          // 正文清空了，引用小标签也跟着收起来
 
-        var botDiv = this.appendMsg('bot', '<span style="color:#6a6a80">思考中...</span>');
+        var botDiv = this.appendMsg('bot', '<span style="color:var(--text-mute)">思考中...</span>');
         this.currentBotDiv = botDiv;
         this.processing = true;
         this.paused = false;
@@ -978,7 +1140,7 @@ var App = {
             var text = result.success ? (result.data || '') : '';
             botDiv.querySelector('.msg-body').innerHTML = toolsHtml
                 + (result.success ? self.formatContent(text)
-                                  : '<span style="color:#e17055">❌ ' + (result.error || '未知错误') + '</span>');
+                                  : '<span style="color:var(--err)">❌ ' + (result.error || '未知错误') + '</span>');
             // 这一轮模型只调了工具、没写正文：别在上面挂个 🦁，保持一行行工具行
             if (result.success && !String(text).trim()) {
                 var av = botDiv.querySelector('.msg-avatar');
@@ -987,7 +1149,7 @@ var App = {
             self.finishProcessing();
           })
           .catch(function(e) {
-            botDiv.querySelector('.msg-body').innerHTML = self.toolLines.join('') + '<span style="color:#e17055">❌ ' + e.message + '</span>';
+            botDiv.querySelector('.msg-body').innerHTML = self.toolLines.join('') + '<span style="color:var(--err)">❌ ' + e.message + '</span>';
             self.finishProcessing();
           });
     },
@@ -1017,20 +1179,20 @@ var App = {
                 }
                 var name = (ev.data && ev.data.toolName) || '';
                 if (ev.type === 'TOOL_CALL_START' && name) {
-                    self.toolLines.push('<div style="font-size:12px;color:#74b9ff;margin-top:4px">🔧 调用工具：<b>' + name + '</b> …</div>');
+                    self.toolLines.push('<div style="font-size:12px;color:var(--info);margin-top:4px">🔧 调用工具：<b>' + name + '</b> …</div>');
                     changed = true;
                 } else if (ev.type === 'TOOL_CALL_COMPLETE' && name) {
-                    self.toolLines.push('<div style="font-size:12px;color:#00b894;margin-top:2px">✅ ' + name + ' 完成</div>');
+                    self.toolLines.push('<div style="font-size:12px;color:var(--ok);margin-top:2px">✅ ' + name + ' 完成</div>');
                     changed = true;
                 } else if (ev.type === 'TOOL_CALL_ERROR' && name) {
-                    self.toolLines.push('<div style="font-size:12px;color:#e17055;margin-top:2px">❌ ' + name + ' 失败</div>');
+                    self.toolLines.push('<div style="font-size:12px;color:var(--err);margin-top:2px">❌ ' + name + ' 失败</div>');
                     changed = true;
                 }
             });
             if (changed) {
                 self.updateBotStatus(self.paused
-                    ? '<span style="color:#fdcb6e">⏸ 已暂停，点击「继续」恢复</span>'
-                    : '<span style="color:#6a6a80">思考中...</span>');
+                    ? '<span style="color:var(--warn)">⏸ 已暂停，点击「继续」恢复</span>'
+                    : '<span style="color:var(--text-mute)">思考中...</span>');
             }
           })
           .catch(function() { /* 轮询失败忽略 */ });
@@ -1098,16 +1260,16 @@ var App = {
             if (res && res.success) {
                 self.hideAskUser();
                 if (self.toolLines) {
-                    self.toolLines.push('<div style="font-size:12px;color:#a29bfe;margin-top:2px">💬 已回答：' +
+                    self.toolLines.push('<div style="font-size:12px;color:var(--accent-soft);margin-top:2px">💬 已回答：' +
                         self.escapeHtml(answer) + '</div>');
-                    self.updateBotStatus('<span style="color:#6a6a80">思考中...</span>');
+                    self.updateBotStatus('<span style="color:var(--text-mute)">思考中...</span>');
                 }
             } else if (hint) {
-                hint.style.color = '#e17055';
+                hint.style.color = 'var(--err)';
                 hint.textContent = '✗ ' + ((res && res.error) || '提交失败');
             }
         }).catch(function(e) {
-            if (hint) { hint.style.color = '#e17055'; hint.textContent = '✗ ' + e; }
+            if (hint) { hint.style.color = 'var(--err)'; hint.textContent = '✗ ' + e; }
         });
     },
 
@@ -1146,11 +1308,11 @@ var App = {
             if (self.paused) {
                 btn.textContent = '▶ 继续';
                 hint.textContent = '⏸ 已暂停（下一轮工具调用前生效）';
-                self.updateBotStatus('<span style="color:#fdcb6e">⏸ 已暂停，点击「继续」恢复</span>');
+                self.updateBotStatus('<span style="color:var(--warn)">⏸ 已暂停，点击「继续」恢复</span>');
             } else {
                 btn.textContent = '⏸ 暂停';
                 hint.textContent = '运行中…';
-                self.updateBotStatus('<span style="color:#6a6a80">思考中...</span>');
+                self.updateBotStatus('<span style="color:var(--text-mute)">思考中...</span>');
             }
           })
           .catch(function(e) { alert('操作失败: ' + e.message); });
@@ -1168,7 +1330,7 @@ var App = {
           .then(function(res) {
             if (!res.success) { alert(res.error || '操作失败'); return; }
             document.getElementById('agentStateHint').textContent = '⏹ 正在停止…（下一轮工具调用前生效）';
-            self.updateBotStatus('<span style="color:#e17055">⏹ 正在停止…</span>');
+            self.updateBotStatus('<span style="color:var(--err)">⏹ 正在停止…</span>');
           })
           .catch(function(e) { alert('操作失败: ' + e.message); });
     },
@@ -1201,61 +1363,84 @@ var App = {
     },
 
     // ====== 插件 ======
+    /** 底部那句"已加载 N 个插件"：新老两种返回都认，拿不到就不更新（不影响聊天） */
     loadPlugins: function() {
-        fetch('/api/plugins').then(function(r) { return r.json(); }).then(function(result) {
-            if (result.success) {
-                document.getElementById('pluginCount').textContent = '已加载 ' + (result.data ? result.data.length : 0) + ' 个插件';
+        fetch('/api/plugins').then(function(r) { return r.json(); }).then(function(res) {
+            var list = App.respList(res, 'plugins');
+            if (!list) { return; }
+            var el = document.getElementById('pluginCount');
+            if (el) { el.textContent = '已加载 ' + list.length + ' 个插件'; }
+            // 欢迎页原来把插件数量写死在标题里（"NN个插件 · 4 Skill + 47 Tool"）——
+            // 插件是会长的东西，写死的数字过两天就是错的（实测注册表里是 67 个）。
+            // 现在按 /api/plugins 的实际数量渲染。
+            var pluginCount = 0;
+            var skillCount = 0;
+            var toolCount = 0;
+            for (var i = 0; i < list.length; i++) {
+                var kind = String((list[i] || {}).kind || '').toUpperCase();
+                if (kind === 'SKILL') { skillCount++; }
+                else if (kind === 'BASE_TOOL' || kind === 'ADVANCED_TOOL' || kind === 'TOOL') { toolCount++; }
+                else if (kind === 'PLUGIN' || kind === 'SYSTEM' || kind === '') { pluginCount++; }
             }
-        });
+            var total = list.length;
+            var a = document.getElementById('welcomePluginCount');
+            var b = document.getElementById('welcomePluginCount2');
+            var c = document.getElementById('welcomePluginDetail');
+            if (a) { a.textContent = total + ' 个插件'; }
+            if (b) { b.textContent = total + ' 个插件'; }
+            if (c) {
+                c.textContent = (toolCount ? toolCount + ' 个工具' : '')
+                    + (skillCount ? (toolCount ? ' + ' : '') + skillCount + ' 个技能' : '')
+                    || '插件化架构';
+            }
+        }).catch(function() { /* 插件列表拿不到就算了，别影响别的 */ });
     },
 
+    /** 侧栏「插件 / 技能」：直接打开设置里的插件页签（老入口，保留） */
     showPlugins: function() {
-        var self = this;
-        fetch('/api/plugins').then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) { alert('加载失败'); return; }
-            var skills = result.data.filter(function(p) { return p.type === 'SKILL'; });
-            var tools = result.data.filter(function(p) { return p.type === 'TOOL'; });
-            var html = '<h3 style="margin-bottom:12px;color:#6c5ce7">📚 技能插件 (' + skills.length + ')</h3>';
-            skills.forEach(function(p) { html += self.pluginCard(p); });
-            html += '<h3 style="margin:20px 0 12px;color:#74b9ff">🔧 工具插件 (' + tools.length + ')</h3>';
-            tools.forEach(function(p) { html += self.pluginCard(p); });
-            self.openModal('插件管理 (' + result.data.length + '个)', html);
-        });
-    },
-
-    pluginCard: function(p) {
-        var icon = p.type === 'SKILL' ? '📚' : '🔧';
-        return '<div style="display:flex;align-items:center;gap:12px;padding:10px;margin-bottom:8px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px">' +
-            '<span style="font-size:20px">' + icon + '</span>' +
-            '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + p.name + '</div><div style="font-size:12px;color:#a0a0b8">' + p.description + '</div></div>' +
-            '<span style="font-size:11px;padding:2px 8px;background:#2d2d4a;border-radius:4px;color:#74b9ff">' + (p.type === 'SKILL' ? '技能' : '工具') + '</span></div>';
+        this.showSettings('plugins');
     },
 
     // ====== 设置 ======
-    showSettings: function() {
+    showSettings: function(tab) {
         // 页签名要直白：本地模型不是"API提供商"，叫那个名字没人会点进来找本地模型
-        var html = '<div style="display:flex;gap:8px;margin-bottom:16px">'
+        var html = '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
+            + '<button class="btn btn-sm" id="setTabAppearance" onclick="App.settingsTab(\'appearance\')">界面</button>'
+            + '<button class="btn btn-sm" id="setTabPlugins" onclick="App.settingsTab(\'plugins\')">插件</button>'
+            + '<button class="btn btn-sm" id="setTabSkills" onclick="App.settingsTab(\'skills\')">技能</button>'
             + '<button class="btn btn-sm" id="setTabProviders" onclick="App.settingsTab(\'providers\')">模型来源（本地 / API）</button>'
             + '<button class="btn btn-sm" id="setTabApprovals" onclick="App.settingsTab(\'approvals\')">审批策略</button>'
             + '<button class="btn btn-sm" id="setTabNotification" onclick="App.settingsTab(\'notification\')">音效提醒</button>'
             + '<button class="btn btn-sm" id="setTabLlama" onclick="App.settingsTab(\'llama\')">本地模型 / llama.cpp</button>'
             + '</div><div id="settingsContent"></div>';
         this.openModal('设置', html);
-        this.settingsTab('providers');
+        this.settingsTab(tab || 'appearance');
     },
 
     // 设置页签切换
     settingsTab: function(tab) {
         var self = this;
-        var titles = {'providers':'setTabProviders', 'approvals':'setTabApprovals',
+        var titles = {'appearance':'setTabAppearance', 'plugins':'setTabPlugins', 'skills':'setTabSkills',
+                      'providers':'setTabProviders', 'approvals':'setTabApprovals',
                       'notification':'setTabNotification', 'llama':'setTabLlama'};
         Object.keys(titles).forEach(function(t) {
             var b = document.getElementById(titles[t]);
             if (!b) return;
-            if (t === tab) { b.style.background = '#6c5ce7'; b.style.color = 'white'; }
-            else { b.style.background = ''; b.style.color = ''; }
+            if (t === tab) {
+                b.style.background = 'var(--accent)';
+                b.style.color = 'var(--accent-fg)';
+                b.style.borderColor = 'var(--accent)';
+            } else {
+                b.style.background = '';
+                b.style.color = '';
+                b.style.borderColor = '';
+            }
         });
-        if (tab === 'providers') self.renderProvidersTab();
+        this.currentSettingsTab = tab;
+        if (tab === 'appearance') self.renderAppearanceTab();
+        else if (tab === 'plugins') self.renderPluginsTab();
+        else if (tab === 'skills') self.renderSkillsTab();
+        else if (tab === 'providers') self.renderProvidersTab();
         else if (tab === 'approvals') self.renderApprovalsTab();
         else if (tab === 'notification') self.renderNotificationTab();
         else if (tab === 'llama') self.renderLlamaTab();
@@ -1266,10 +1451,10 @@ var App = {
     // 参数改完要重启本地模型才生效 —— 界面会明确提示，并提供一键重启。
     renderLlamaTab: function() {
         var self = this;
-        var inp = 'width:100%;padding:6px 10px;background:#1a1a2e;border:1px solid #2d2d4a;'
-                + 'border-radius:6px;color:#e8e8f0;font-size:13px;box-sizing:border-box';
-        var lbl = 'font-size:11.5px;color:#a0a0b8;display:block;margin-bottom:3px';
-        var box = 'border:1px solid #2d2d4a;border-radius:8px;padding:12px;margin-bottom:12px';
+        var inp = 'width:100%;padding:6px 10px;background:var(--panel-2);border:1px solid var(--border);'
+                + 'border-radius:6px;color:var(--text);font-size:13px;box-sizing:border-box';
+        var lbl = 'font-size:11.5px;color:var(--text-dim);display:block;margin-bottom:3px';
+        var box = 'border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px';
         var grid = 'display:grid;grid-template-columns:1fr 1fr;gap:10px';
 
         function field(key, label, hint, value, type) {
@@ -1297,28 +1482,28 @@ var App = {
             var curSize = dCur ? (dCur.sizeText || (dCur.sizeGb + ' GB')) : '';
             var curState = '';
             if (hasCurrent) {
-                curState = '<span style="color:#00b894">✓ 正在使用</span>';
+                curState = '<span style="color:var(--ok)">✓ 正在使用</span>';
             } else if (dCur && dCur.downloaded) {
-                curState = '<span style="color:#6c5ce7">已选好·发一条消息就会用它</span>';
+                curState = '<span style="color:var(--accent)">已选好·发一条消息就会用它</span>';
             } else {
-                curState = '<span style="color:#e17055">还没下载</span>';
+                curState = '<span style="color:var(--err)">还没下载</span>';
             }
             html += '<div style="' + box + '">';
             html += '<div style="font-weight:600;margin-bottom:10px">模型</div>';
             html += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;'
-                 +  'padding:10px 12px;background:#12121f;border:1px solid #2d2d4a;border-radius:10px">'
+                 +  'padding:10px 12px;background:var(--inset);border:1px solid var(--border);border-radius:10px">'
                  +  '<div style="flex:1;min-width:200px">'
-                 +  '<div style="font-size:11.5px;color:#6a6a80">当前在用</div>'
-                 +  '<div style="font-size:15px;color:#e8e8f0;font-weight:600;margin-top:2px">'
+                 +  '<div style="font-size:11.5px;color:var(--text-mute)">当前在用</div>'
+                 +  '<div style="font-size:15px;color:var(--text);font-weight:600;margin-top:2px">'
                  +  self.escapeHtml(curName)
-                 +  (curSize ? ' <span style="font-size:12px;color:#6a6a80;font-weight:400">' + curSize + '</span>' : '')
+                 +  (curSize ? ' <span style="font-size:12px;color:var(--text-mute);font-weight:400">' + curSize + '</span>' : '')
                  +  '</div>'
                  +  '<div style="font-size:12px;margin-top:3px">' + curState + '</div>'
                  +  '</div>'
                  +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 打开模型文件夹</button>'
                  +  '</div>';
-            html += '<div style="font-size:11.5px;color:#6a6a80;margin-top:8px;line-height:1.7">'
-                 +  '模型文件放在 <span style="font-family:monospace;color:#a0a0b8">'
+            html += '<div style="font-size:11.5px;color:var(--text-mute);margin-top:8px;line-height:1.7">'
+                 +  '模型文件放在 <span style="font-family:monospace;color:var(--text-dim)">'
                  +  self.escapeHtml(d.modelDir || '') + '</span>：'
                  +  '想换版本就在下面点「下载」，'
                  +  '你自己的 .gguf 丢进去也会出现在下面。</div>';
@@ -1329,37 +1514,37 @@ var App = {
                 // 状态只有四种说法，不再用“已选中但没在用”这种内部话
                 var state, btn = '';
                 if (m.downloading) {
-                    state = '<span style="color:#fdcb6e">正在下载…</span>';
+                    state = '<span style="color:var(--warn)">正在下载…</span>';
                     btn = '<button class="btn btn-sm" disabled>下载中</button>';
                 } else if (m.current) {
-                    state = '<span style="color:#00b894">✓ 正在使用</span>';
+                    state = '<span style="color:var(--ok)">✓ 正在使用</span>';
                 } else if (m.configured && m.downloaded) {
-                    state = '<span style="color:#6c5ce7">已选好·下一条消息就用它</span>';
+                    state = '<span style="color:var(--accent)">已选好·下一条消息就用它</span>';
                     btn = '<button class="btn btn-sm" onclick="App.restartLocalModel()">立即加载</button>';
                 } else if (m.downloaded) {
-                    state = '<span style="color:#6a6a80">已下载，现在没用它</span>';
+                    state = '<span style="color:var(--text-mute)">已下载，现在没用它</span>';
                     btn = '<button class="btn btn-sm btn-primary" onclick="App.switchLlamaModel(\'' + m.file + '\')">用它</button>';
                 } else {
-                    state = '<span style="color:#6a6a80">本机还没有这份权重</span>';
+                    state = '<span style="color:var(--text-mute)">本机还没有这份权重</span>';
                     btn = '<button class="btn btn-sm btn-primary" onclick="App.downloadLlamaModel(\'' + m.file + '\')">下载</button>';
                 }
                 var card = '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;'
-                         +  'padding:10px 12px;margin-top:8px;background:#1a1a2e;'
-                         +  'border:1px solid ' + (m.current ? '#6c5ce7' : '#2d2d4a') + ';border-radius:10px">'
+                         +  'padding:10px 12px;margin-top:8px;background:var(--panel-2);'
+                         +  'border:1px solid ' + (m.current ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px">'
                          +  '<div style="flex:1;min-width:200px">'
-                         +  '<div style="font-size:13.5px;color:#e8e8f0">'
+                         +  '<div style="font-size:13.5px;color:var(--text)">'
                          +  self.escapeHtml(m.label)
-                         +  ' <span style="font-size:12px;color:#6a6a80">' + sizeTxt + '</span>'
-                         +  (custom ? ' <span style="font-size:11px;color:#6a6a80">· 你自己放的</span>' : '')
+                         +  ' <span style="font-size:12px;color:var(--text-mute)">' + sizeTxt + '</span>'
+                         +  (custom ? ' <span style="font-size:11px;color:var(--text-mute)">· 你自己放的</span>' : '')
                          +  '</div>'
-                         +  '<div style="font-size:11.5px;color:#6a6a80;margin-top:3px">'
+                         +  '<div style="font-size:11.5px;color:var(--text-mute);margin-top:3px">'
                          +  self.escapeHtml(m.note || '') + '</div>'
                          +  '<div style="font-size:12px;margin-top:5px">' + state + '</div>'
                          +  (m.downloading
-                             ? '<div style="margin-top:6px;height:6px;background:#12121f;'
-                               + 'border:1px solid #2d2d4a;border-radius:4px;overflow:hidden">'
+                             ? '<div style="margin-top:6px;height:6px;background:var(--inset);'
+                               + 'border:1px solid var(--border);border-radius:4px;overflow:hidden">'
                                + '<div id="dlrowfill_' + self.escapeAttr(m.file) + '" '
-                               + 'style="height:100%;width:0%;background:#6c5ce7;transition:width .4s">'
+                               + 'style="height:100%;width:0%;background:var(--accent);transition:width .4s">'
                                + '</div></div>'
                              : '')
                          +  '</div>'
@@ -1372,8 +1557,8 @@ var App = {
             var custom = models.filter(function(m) { return m.custom; });
             official.forEach(function(m) { html += modelCard(m, false); });
             if (custom.length) {
-                html += '<div style="margin-top:14px;padding-top:10px;border-top:1px solid #2d2d4a;'
-                     +  'font-size:12px;color:#a0a0b8">你自己放进模型文件夹的（' + custom.length
+                html += '<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border);'
+                     +  'font-size:12px;color:var(--text-dim)">你自己放进模型文件夹的（' + custom.length
                      +  '）</div>';
                 custom.forEach(function(m) { html += modelCard(m, true); });
             }
@@ -1381,8 +1566,8 @@ var App = {
 
             // ── 配置和实际用的不一致时，只给一个动作 ──
             if (d.modelMismatch) {
-                html += '<div style="border:1px solid #e17055;background:#2a1f1c;border-radius:10px;'
-                     +  'padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:#ffb8a3">'
+                html += '<div style="border:1px solid var(--err);background:var(--err-bg);border-radius:10px;'
+                     +  'padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:var(--err-text)">'
                      +  '⚠️ ' + self.escapeHtml(d.modelMismatch)
                      +  '<div style="margin-top:8px">'
                      +  '<button class="btn btn-sm" onclick="App.downloadLlamaModel(\''
@@ -1391,10 +1576,10 @@ var App = {
 
 
             // ── 高级：llama.cpp 启动参数（默认收起，不懂就别动）──
-            html += '<div style="margin-top:16px;border-top:1px solid #2d2d4a;padding-top:12px">'
+            html += '<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">'
                  +  '<button class="btn btn-sm" onclick="App.toggleLlamaAdvanced()" id="llamaAdvBtn">'
                  +  '⚙️ 高级：llama.cpp 启动参数（不懂就别动）▾</button>'
-                 +  '<div style="font-size:11.5px;color:#6a6a80;margin-top:6px">'
+                 +  '<div style="font-size:11.5px;color:var(--text-mute);margin-top:6px">'
                  +  '下面是跑模型那个进程的启动参数（给懂 llama.cpp 的人用）：'
                  +  '改完点保存，再点「重启本地模型」才生效。'
                  +  '拿不准的项就别动，默认值是按这台机器调过的。</div>'
@@ -1429,7 +1614,7 @@ var App = {
                 // ---- 采样 ----
                 html += '<div style="' + box + '">';
                 html += '<div style="font-weight:600;margin-bottom:8px">采样</div>';
-                html += '<div style="font-size:11.5px;color:#6a6a80;margin-bottom:8px">'
+                html += '<div style="font-size:11.5px;color:var(--text-mute);margin-bottom:8px">'
                      + '出厂默认（temp 0.8、无重复惩罚）实测会让这个模型跑飞，别随手改回去。</div>';
                 html += '<div style="' + grid + '">'
                      + field('temperature', '温度 --temp', '', d.temperature)
@@ -1459,8 +1644,8 @@ var App = {
                 html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
                      +  '<button class="btn btn-primary" onclick="App.saveLlamaConfig()">保存参数</button>'
                      +  '<button class="btn" onclick="App.restartLocalModel()">重启本地模型</button>'
-                     +  '<span id="llamaMsg" style="font-size:12px;color:#6a6a80"></span></div>';
-                html += '<div style="margin-top:10px;font-size:11.5px;color:#6a6a80">'
+                     +  '<span id="llamaMsg" style="font-size:12px;color:var(--text-mute)"></span></div>';
+                html += '<div style="margin-top:10px;font-size:11.5px;color:var(--text-mute)">'
                      + '当前状态：' + (d.running ? '本地模型正在运行' : '本地模型未运行')
                      + '；改完参数请点「重启本地模型」。</div>';
             html += '</div>';
@@ -1529,18 +1714,18 @@ var App = {
         App._dlgMode = mode || 'download';      // download = 只下不切；use = 下完就用它
         var m = App.modelRow(file);
         var sizeTxt = m.sizeText || (m.sizeGb ? (m.sizeGb + ' GB') : '');
-        var html = '<div style="font-size:13.5px;color:#e8e8f0;margin-bottom:4px">'
+        var html = '<div style="font-size:13.5px;color:var(--text);margin-bottom:4px">'
                  + App.escapeHtml(m.label || file) + '</div>'
-                 + '<div style="font-size:11.5px;color:#6a6a80;font-family:monospace;margin-bottom:12px">'
+                 + '<div style="font-size:11.5px;color:var(--text-mute);font-family:monospace;margin-bottom:12px">'
                  + App.escapeHtml(file) + (sizeTxt ? ' · ' + sizeTxt : '') + '</div>'
-                 + '<div id="dlgState" style="font-size:12.5px;color:#fdcb6e;margin-bottom:8px">'
+                 + '<div id="dlgState" style="font-size:12.5px;color:var(--warn);margin-bottom:8px">'
                  + '正在准备下载…</div>'
-                 + '<div style="height:12px;background:#12121f;border:1px solid #2d2d4a;'
+                 + '<div style="height:12px;background:var(--inset);border:1px solid var(--border);'
                  + 'border-radius:6px;overflow:hidden">'
                  + '<div id="dlgFill" style="height:100%;width:0%;'
-                 + 'background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div></div>'
+                 + 'background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .4s"></div></div>'
                  + '<div style="display:flex;justify-content:space-between;font-size:11.5px;'
-                 + 'color:#a0a0b8;margin-top:6px">'
+                 + 'color:var(--text-dim);margin-top:6px">'
                  + '<span id="dlgBytes">0 MB</span><span id="dlgPct">0%</span>'
                  + '<span id="dlgSpeed"></span></div>'
                  + '<div id="dlgBtns" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">'
@@ -1584,14 +1769,14 @@ var App = {
             document.getElementById('dlgBytes').textContent =
                 App.mbText(bytes) + (total > 0 ? ' / ' + App.mbText(total) : '');
             document.getElementById('dlgSpeed').textContent = App._dlSpeedTxt || '';
-            state.style.color = '#fdcb6e';
+            state.style.color = 'var(--warn)';
             state.textContent = '正在下载…（关掉这个窗口也会继续下）';
             return;
         }
         if (m.downloaded) {
             fill.style.width = '100%';
             document.getElementById('dlgPct').textContent = '100%';
-            state.style.color = '#00b894';
+            state.style.color = 'var(--ok)';
             state.textContent = '✓ 下载完成，可以用了';
             document.getElementById('dlgBtns').innerHTML =
                 '<button class="btn btn-sm" onclick="App.collapseDownloadDialog()">关闭</button>'
@@ -1599,8 +1784,8 @@ var App = {
             return;
         }
         if (phase === 'failed') {
-            fill.style.background = '#e17055';
-            state.style.color = '#e17055';
+            fill.style.background = 'var(--err)';
+            state.style.color = 'var(--err)';
             state.textContent = '✗ 下载失败：' + (st.lastError || '原因见日志');
             document.getElementById('dlgBtns').innerHTML =
                 '<button class="btn btn-sm" onclick="App.collapseDownloadDialog()">关闭</button>'
@@ -1613,9 +1798,9 @@ var App = {
         var file = App._dlgFile;
         if (!file) { return; }
         var fill = document.getElementById('dlgFill');
-        if (fill) { fill.style.background = 'linear-gradient(90deg,#6c5ce7,#00b894)'; }
+        if (fill) { fill.style.background = 'linear-gradient(90deg,var(--accent),var(--ok))'; }
         var state = document.getElementById('dlgState');
-        if (state) { state.style.color = '#fdcb6e'; state.textContent = '重新开始下载…'; }
+        if (state) { state.style.color = 'var(--warn)'; state.textContent = '重新开始下载…'; }
         App.startDownload(file);
     },
 
@@ -1630,7 +1815,7 @@ var App = {
             var state = document.getElementById('dlgState');
             if (!res || !res.success) {
                 if (state) {
-                    state.style.color = '#e17055';
+                    state.style.color = 'var(--err)';
                     state.textContent = '✗ 没能开始下载：' + ((res && res.error) || '');
                 }
                 return;
@@ -1640,7 +1825,7 @@ var App = {
             App.tickLocal();
         }).catch(function(e) {
             var state = document.getElementById('dlgState');
-            if (state) { state.style.color = '#e17055'; state.textContent = '✗ 没能开始下载：' + e; }
+            if (state) { state.style.color = 'var(--err)'; state.textContent = '✗ 没能开始下载：' + e; }
         });
     },
 
@@ -1707,10 +1892,10 @@ var App = {
         fetch('/api/notification').then(function(r) { return r.json(); }).then(function(res) {
             var c = (res && res.success && res.data) ? res.data : {};
             var rowStyle = 'display:flex;align-items:center;justify-content:space-between;'
-                         + 'padding:9px 0;border-bottom:1px solid #23233a';
-            var nameStyle = 'font-size:13px;color:#e8e8f0';
-            var descStyle = 'font-size:11px;color:#6a6a80;margin-top:3px';
-            var chk = 'width:16px;height:16px;cursor:pointer;accent-color:#6c5ce7';
+                         + 'padding:9px 0;border-bottom:1px solid var(--border-soft)';
+            var nameStyle = 'font-size:13px;color:var(--text)';
+            var descStyle = 'font-size:11px;color:var(--text-mute);margin-top:3px';
+            var chk = 'width:16px;height:16px;cursor:pointer;accent-color:var(--accent)';
 
             function row(id, label, desc, checked, disabled) {
                 return '<div style="' + rowStyle + '">'
@@ -1722,7 +1907,7 @@ var App = {
                      + '</div>';
             }
 
-            var html = '<p style="color:#a0a0b8;margin-bottom:14px;font-size:12px;line-height:1.7">'
+            var html = '<p style="color:var(--text-dim);margin-bottom:14px;font-size:12px;line-height:1.7">'
                 + '在这些时机播放提示音，不用一直盯着屏幕。<br>'
                 + '音效由本机播放（不联网、不上传），改完立即生效。</p>';
 
@@ -1743,17 +1928,17 @@ var App = {
             html += '<div style="padding:14px 0 4px">'
                  +  '<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
                  +    '<span style="' + nameStyle + '">音量</span>'
-                 +    '<span id="ntfVolText" style="font-size:12px;color:#a0a0b8">' + vol + '</span>'
+                 +    '<span id="ntfVolText" style="font-size:12px;color:var(--text-dim)">' + vol + '</span>'
                  +  '</div>'
                  +  '<input type="range" id="ntfVolume" min="0" max="100" step="5" value="' + vol + '"'
-                 +  ' style="width:100%;accent-color:#6c5ce7"'
+                 +  ' style="width:100%;accent-color:var(--accent)"'
                  +  ' oninput="document.getElementById(\'ntfVolText\').textContent=this.value"'
                  +  ' onchange="App.onNotificationChange()">'
                  +  '<div style="' + descStyle + '">0 = 静音</div>'
                  + '</div>';
 
             // 试听
-            html += '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #2d2d4a">'
+            html += '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">'
                  +  '<div style="' + nameStyle + ';margin-bottom:8px">试听</div>'
                  +  '<button class="btn btn-sm" style="margin-right:8px" onclick="App.testSound(\'done\')">任务完成</button>'
                  +  '<button class="btn btn-sm" style="margin-right:8px" onclick="App.testSound(\'approval\')">需要审批</button>'
@@ -1763,7 +1948,7 @@ var App = {
                  +  '试听不受总开关和节流限制，可以连点；音量按上面那条走。</div>'
                  + '</div>';
 
-            html += '<div id="ntfStatus" style="margin-top:12px;font-size:12px;color:#00b894"></div>';
+            html += '<div id="ntfStatus" style="margin-top:12px;font-size:12px;color:var(--ok)"></div>';
 
             document.getElementById('settingsContent').innerHTML = html;
         });
@@ -1792,11 +1977,11 @@ var App = {
             body: JSON.stringify(body)
         }).then(function(r) { return r.json(); }).then(function(res) {
             if (!st) return;
-            st.style.color = res.success ? '#00b894' : '#e17055';
+            st.style.color = res.success ? 'var(--ok)' : 'var(--err)';
             st.textContent = res.success ? '✓ 已保存' : ('✗ ' + (res.error || '保存失败'));
             setTimeout(function() { if (st) st.textContent = ''; }, 2000);
         }).catch(function(e) {
-            if (st) { st.style.color = '#e17055'; st.textContent = '✗ 保存失败: ' + e; }
+            if (st) { st.style.color = 'var(--err)'; st.textContent = '✗ 保存失败: ' + e; }
         });
     },
 
@@ -1807,12 +1992,12 @@ var App = {
             .then(function(r) { return r.json(); })
             .then(function(res) {
                 if (!st) return;
-                st.style.color = res.success ? '#00b894' : '#e17055';
+                st.style.color = res.success ? 'var(--ok)' : 'var(--err)';
                 st.textContent = (res.success ? '✓ ' : '✗ ')
                                + (res.data || res.message || res.error || '');
             })
             .catch(function(e) {
-                if (st) { st.style.color = '#e17055'; st.textContent = '✗ ' + e; }
+                if (st) { st.style.color = 'var(--err)'; st.textContent = '✗ ' + e; }
             });
     },
 
@@ -1823,13 +2008,13 @@ var App = {
             var d = (res && res.success && res.data) ? res.data : {};
             var mode = d.mode || 'local';
             var st = d.localStatus || {};
-            var inp = 'width:100%;padding:7px 12px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:6px;color:#e8e8f0;font-size:13px;box-sizing:border-box';
+            var inp = 'width:100%;padding:7px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;box-sizing:border-box';
             var mono = inp + ';font-family:monospace';
-            var lbl = 'font-size:12px;color:#a0a0b8;display:block;margin-bottom:4px';
+            var lbl = 'font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px';
 
-            var html = '<p style="color:#a0a0b8;margin-bottom:16px">选一种模型来源。'
-                     + '<b style="color:#e8e8f0">本地模型</b>用本机自带的权重，不联网、不要 Key；'
-                     + '<b style="color:#e8e8f0">自定义 API</b>填你自己的接口地址与密钥，'
+            var html = '<p style="color:var(--text-dim);margin-bottom:16px">选一种模型来源。'
+                     + '<b style="color:var(--text)">本地模型</b>用本机自带的权重，不联网、不要 Key；'
+                     + '<b style="color:var(--text)">自定义 API</b>填你自己的接口地址与密钥，'
                      + '任何兼容 OpenAI 调用格式的服务都能用。</p>';
 
             // ---- 模式切换 ----
@@ -1841,7 +2026,7 @@ var App = {
                  +  '</div>';
 
             // ---- 本地模型 ----
-            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px;margin-bottom:14px">';
+            html += '<div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">';
             html += '<div style="font-weight:600;margin-bottom:10px">本地模型</div>';
             html += '<div style="margin-bottom:8px"><label style="' + lbl + '">推理端点</label>'
                  +  '<input style="' + mono + '" value="' + ((d.localBaseUrl || '') + '') + '" readonly></div>';
@@ -1853,8 +2038,8 @@ var App = {
             html += '<button class="btn" style="margin-right:8px" onclick="App.loadLocalModel()">立即加载模型</button>';
             html += '<button class="btn" style="margin-right:8px" onclick="App.warmUpModel()">预热提示词</button>';
             html += '<button class="btn" onclick="App.unloadLocalModel()">卸载模型（释放显存）</button>';
-            html += '<div id="warmupStatus" style="margin-top:8px;font-size:12px;color:#6a6a80"></div>';
-            html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80">'
+            html += '<div id="warmupStatus" style="margin-top:8px;font-size:12px;color:var(--text-mute)"></div>';
+            html += '<div style="margin-top:10px;font-size:12px;color:var(--text-mute)">'
                  +  '权重不随安装包分发：你在下面选了哪份，软件一启动就开始下那一份'
                  +  '（不占显存，进度就在输入框上面那块「模型」面板里；也可以点「下载模型」）。<br>'
                  +  '没下完也不耽误聊天：会先用目录里现成的那份，并在上面如实说明用的是哪份。'
@@ -1876,10 +2061,10 @@ var App = {
             var cModel = (mode === 'custom') ? (d.model || '')   : (saved.model || '');
             var hasSaved = !!(saved.baseUrl || saved.model);
 
-            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px">';
+            html += '<div style="border:1px solid var(--border);border-radius:8px;padding:14px">';
             html += '<div style="font-weight:600;margin-bottom:10px">自定义 API</div>';
             if (hasSaved && mode !== 'custom') {
-                html += '<div style="margin-bottom:10px;font-size:12px;color:#00b894">'
+                html += '<div style="margin-bottom:10px;font-size:12px;color:var(--ok)">'
                      +  '✓ 已保存过一份配置，点「自定义 API」会直接切回去，不用重填</div>';
             }
             html += '<div style="margin-bottom:8px"><label style="' + lbl + '">接口地址（Base URL）</label>'
@@ -1891,9 +2076,9 @@ var App = {
             html += '<div style="margin-bottom:8px"><label style="' + lbl + '">模型名称</label>'
                  +  '<input id="cfgCustomModel" style="' + mono + '" placeholder="填服务商给出的模型 ID" value="'
                  +  self.escapeHtml(cModel) + '"></div>';
-            html += '<div id="customStatus" style="margin:10px 0;font-size:13px;color:#a0a0b8"></div>';
+            html += '<div id="customStatus" style="margin:10px 0;font-size:13px;color:var(--text-dim)"></div>';
             html += '<button class="btn btn-primary" onclick="App.saveCustomApi()">保存并启用</button>';
-            html += '<div style="margin-top:10px;font-size:12px;color:#6a6a80;line-height:1.8">'
+            html += '<div style="margin-top:10px;font-size:12px;color:var(--text-mute);line-height:1.8">'
                  +  '· 地址要填到版本号那一层，通常是 <span style="font-family:monospace">…/v1</span><br>'
                  +  '· 只要兼容 OpenAI 的 <span style="font-family:monospace">/chat/completions</span> 调用格式就能用，不限服务商<br>'
                  +  '· Key 只存在本机（用户目录下的 .lioncode/app-config.json），不会上传到任何地方<br>'
@@ -1902,7 +2087,7 @@ var App = {
 
             // ---- 工具调用方式（两种格式都支持，这里只是选"首选哪个"）----
             var tcm = d.toolCallMode || 'auto';
-            html += '<div style="border:1px solid #2d2d4a;border-radius:8px;padding:14px;margin-top:14px">';
+            html += '<div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:14px">';
             html += '<div style="font-weight:600;margin-bottom:10px">工具调用方式</div>';
             html += '<div style="margin-bottom:8px"><label style="' + lbl + '">首选格式</label>'
                  +  '<select id="cfgToolCallMode" onchange="App.saveToolCallMode()" style="' + inp + '">'
@@ -1910,8 +2095,8 @@ var App = {
                  +  '<option value="native"' + (tcm === 'native' ? ' selected' : '') + '>原生 function calling —— 下发 tools 定义，走 API 工具通道</option>'
                  +  '<option value="text"'   + (tcm === 'text'   ? ' selected' : '') + '>仅文本 —— 不发 tools，用提示词里的 &lt;tool_call&gt; 格式</option>'
                  +  '</select></div>';
-            html += '<div id="toolCallModeStatus" style="margin:6px 0 10px;font-size:13px;color:#a0a0b8"></div>';
-            html += '<div style="font-size:12px;color:#6a6a80;line-height:1.8">'
+            html += '<div id="toolCallModeStatus" style="margin:6px 0 10px;font-size:13px;color:var(--text-dim)"></div>';
+            html += '<div style="font-size:12px;color:var(--text-mute);line-height:1.8">'
                  +  '· 两种格式<b>都能识别</b>：模型用原生 tool_calls 回、还是用文本 '
                  +  '<span style="font-family:monospace">&lt;tool_call&gt;</span> 回，系统都认，这里选的只是"让模型优先用哪种"<br>'
                  +  '· 本地模型是按住文本格式微调的，而且本地运行时没开工具模板，所以默认走文本<br>'
@@ -1927,7 +2112,7 @@ var App = {
     localStatusText: function(st) {
         st = st || {};
         if (!st.runtimeInstalled) {
-            return '<span style="color:#e17055">✗ 找不到模型运行时（runtime-vulkan\\llama-server.exe）</span>';
+            return '<span style="color:var(--err)">✗ 找不到模型运行时（runtime-vulkan\\llama-server.exe）</span>';
         }
         if (!st.modelInstalled) {
             // 没下载 ≠ 出错：权重是首次使用时才下的，这里要把话说清楚，
@@ -1936,30 +2121,30 @@ var App = {
                 var mb = Math.floor((st.downloadBytes || 0) / 1048576);
                 if (st.downloadTotal > 0) {
                     var pct = Math.floor((st.downloadBytes || 0) * 100 / st.downloadTotal);
-                    return '<span style="color:#fdcb6e">⏳ 正在下载模型… ' + pct + '%（'
+                    return '<span style="color:var(--warn)">⏳ 正在下载模型… ' + pct + '%（'
                          + mb + ' / ' + Math.floor(st.downloadTotal / 1048576) + ' MB）</span>';
                 }
-                return '<span style="color:#fdcb6e">⏳ 正在下载模型…（已下 ' + mb + ' MB）</span>';
+                return '<span style="color:var(--warn)">⏳ 正在下载模型…（已下 ' + mb + ' MB）</span>';
             }
             if (st.lastError) {
-                return '<span style="color:#e17055">✗ 模型没能就绪：' + st.lastError + '</span>';
+                return '<span style="color:var(--err)">✗ 模型没能就绪：' + st.lastError + '</span>';
             }
-            return '<span style="color:#fdcb6e">○ 模型尚未下载（只下一次）</span>'
-                 + '<span style="color:#6a6a80"> —— 发第一条消息会自动开始下载，'
+            return '<span style="color:var(--warn)">○ 模型尚未下载（只下一次）</span>'
+                 + '<span style="color:var(--text-mute)"> —— 发第一条消息会自动开始下载，'
                  + '也可以点下面的「下载模型」先下好</span>';
         }
         if (st.running) {
-            return '<span style="color:#00b894">✓ 模型已加载，正在服务</span>'
-                 + '<span style="color:#6a6a80"> （' + (st.host || '') + ':' + (st.port || '') + '）</span>';
+            return '<span style="color:var(--ok)">✓ 模型已加载，正在服务</span>'
+                 + '<span style="color:var(--text-mute)"> （' + (st.host || '') + ':' + (st.port || '') + '）</span>';
         }
         if (st.starting) {
-            return '<span style="color:#fdcb6e">⏳ 正在加载模型…</span>'
-                 + '<span style="color:#6a6a80"> 首次加载约 30~90 秒</span>';
+            return '<span style="color:var(--warn)">⏳ 正在加载模型…</span>'
+                 + '<span style="color:var(--text-mute)"> 首次加载约 30~90 秒</span>';
         }
         if (st.lastError) {
-            return '<span style="color:#e17055">✗ 上次启动失败：' + st.lastError + '</span>';
+            return '<span style="color:var(--err)">✗ 上次启动失败：' + st.lastError + '</span>';
         }
-        return '<span style="color:#a0a0b8">○ 模型未加载（发出第一条消息时自动加载）</span>';
+        return '<span style="color:var(--text-dim)">○ 模型未加载（发出第一条消息时自动加载）</span>';
     },
 
     /** 切换运行方式 */
@@ -1983,7 +2168,7 @@ var App = {
             }).then(function(r) { return r.json(); }).then(function(res) {
                 if (!res.success) {
                     if (box) {
-                        box.style.color = '#e17055';
+                        box.style.color = 'var(--err)';
                         box.textContent = '✗ ' + (res.error || '切换失败') + '（请在下面填好三项再点）';
                     }
                     return;
@@ -2010,22 +2195,22 @@ var App = {
         var baseUrl = (document.getElementById('cfgCustomUrl') || {}).value || '';
         var apiKey  = (document.getElementById('cfgCustomKey') || {}).value || '';
         var model   = (document.getElementById('cfgCustomModel') || {}).value || '';
-        if (!baseUrl.trim()) { box.style.color = '#e17055'; box.textContent = '请填写 Base URL'; return; }
-        if (!model.trim())   { box.style.color = '#e17055'; box.textContent = '请填写模型名称'; return; }
-        box.style.color = '#a0a0b8';
+        if (!baseUrl.trim()) { box.style.color = 'var(--err)'; box.textContent = '请填写 Base URL'; return; }
+        if (!model.trim())   { box.style.color = 'var(--err)'; box.textContent = '请填写模型名称'; return; }
+        box.style.color = 'var(--text-dim)';
         box.textContent = '正在保存并测试连接…';
         fetch('/api/runtime/mode', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({mode: 'custom', baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim()})
         }).then(function(r) { return r.json(); }).then(function(res) {
-            if (!res.success) { box.style.color = '#e17055'; box.textContent = '✗ ' + (res.error || '保存失败'); return; }
-            box.style.color = '#00b894';
+            if (!res.success) { box.style.color = 'var(--err)'; box.textContent = '✗ ' + (res.error || '保存失败'); return; }
+            box.style.color = 'var(--ok)';
             box.textContent = '✓ 已启用自定义 API';
             App.fillModels([{id: model.trim(), name: model.trim()}]);
             App.renderProvidersTab();
             App.refreshRuntimeBanner();
         }).catch(function(e) {
-            box.style.color = '#e17055'; box.textContent = '✗ 保存失败: ' + e;
+            box.style.color = 'var(--err)'; box.textContent = '✗ 保存失败: ' + e;
         });
     },
 
@@ -2035,25 +2220,25 @@ var App = {
         var box = document.getElementById('toolCallModeStatus');
         if (!sel) { return; }
         var mode = sel.value;
-        box.style.color = '#a0a0b8';
+        box.style.color = 'var(--text-dim)';
         box.textContent = '正在保存…';
         fetch('/api/runtime/tool-call-mode', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({mode: mode})
         }).then(function(r) { return r.json(); }).then(function(res) {
             if (!res || !res.success) {
-                box.style.color = '#e17055';
+                box.style.color = 'var(--err)';
                 box.textContent = '✗ ' + ((res && res.error) || '保存失败');
                 return;
             }
-            box.style.color = '#00b894';
+            box.style.color = 'var(--ok)';
             box.textContent = '✓ 已保存：' + ({
                 auto:   '自动（云端原生 / 本地文本）',
                 native: '原生 function calling',
                 text:   '仅文本 <tool_call>'
             }[mode] || mode) + '（下一条消息生效）';
         }).catch(function(e) {
-            box.style.color = '#e17055';
+            box.style.color = 'var(--err)';
             box.textContent = '✗ 保存失败: ' + e;
         });
     },
@@ -2061,23 +2246,23 @@ var App = {
     /** 预热：把系统提示词 + 工具定义的前缀缓存提前算好（纯 CPU 推理时很关键） */
     warmUpModel: function() {
         var box = document.getElementById('warmupStatus');
-        if (box) { box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在预热（首次会把模型也拉起来）…</span>'; }
+        if (box) { box.innerHTML = '<span style="color:var(--warn)">⏳ 正在预热（首次会把模型也拉起来）…</span>'; }
         fetch('/api/runtime/warmup', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
                 var d = (res && res.data) || {};
                 if (!box) { return; }
                 if (!d.warmed) {
-                    box.innerHTML = '<span style="color:#e17055">未预热：' + (d.reason || '未知') + '</span>';
+                    box.innerHTML = '<span style="color:var(--err)">未预热：' + (d.reason || '未知') + '</span>';
                     return;
                 }
-                box.innerHTML = '<span style="color:#00b894">✓ 预热完成</span>'
-                    + '<span style="color:#6a6a80">　前缀 ' + d.promptTokens + ' token，'
+                box.innerHTML = '<span style="color:var(--ok)">✓ 预热完成</span>'
+                    + '<span style="color:var(--text-mute)">　前缀 ' + d.promptTokens + ' token，'
                     + '耗时 ' + d.seconds + ' 秒 → <b>' + d.tokensPerSecond + ' tok/s</b> 预填充速度'
                     + '（含工具定义 ' + d.toolDefinitions + ' 个）</span>';
             })
             .catch(function(e) {
-                if (box) { box.innerHTML = '<span style="color:#e17055">✗ 预热失败: ' + e + '</span>'; }
+                if (box) { box.innerHTML = '<span style="color:var(--err)">✗ 预热失败: ' + e + '</span>'; }
             });
     },
 
@@ -2090,13 +2275,13 @@ var App = {
         var box = document.getElementById('localStatus');
         var cur = (document.getElementById('llama_modelFile') || {}).value || '';
         if (cur) { App.openDownloadDialog(cur, 'download'); }
-        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在下载体积…（进度在下面那个窗口里）</span>';
+        box.innerHTML = '<span style="color:var(--warn)">⏳ 正在下载体积…（进度在下面那个窗口里）</span>';
         fetch('/api/runtime/local/download', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
                 var st = (res && res.data) || {};
                 if (st.modelInstalled) {
-                    box.innerHTML = '<span style="color:#00b894">✓ 权重已下载完成</span>'
+                    box.innerHTML = '<span style="color:var(--ok)">✓ 权重已下载完成</span>'
                                   + App.localStatusText(st);
                 } else {
                     box.innerHTML = App.localStatusText(st);
@@ -2107,13 +2292,13 @@ var App = {
                 if (res && res.success) { App.fillModelsFromConfig(); }
             })
             .catch(function(e) {
-                box.innerHTML = '<span style="color:#e17055">✗ 下载失败: ' + e + '</span>';
+                box.innerHTML = '<span style="color:var(--err)">✗ 下载失败: ' + e + '</span>';
             });
     },
 
     loadLocalModel: function() {
         var box = document.getElementById('localStatus');
-        box.innerHTML = '<span style="color:#fdcb6e">⏳ 正在加载模型…（首次约 30~90 秒）</span>';
+        box.innerHTML = '<span style="color:var(--warn)">⏳ 正在加载模型…（首次约 30~90 秒）</span>';
         fetch('/api/runtime/local/start', {method:'POST'})
             .then(function(r) { return r.json(); })
             .then(function(res) {
@@ -2121,7 +2306,7 @@ var App = {
                 if (res && res.success) { App.refreshRuntimeBanner(); App.fillModelsFromConfig(); }
             })
             .catch(function(e) {
-                box.innerHTML = '<span style="color:#e17055">✗ 加载失败: ' + e + '</span>';
+                box.innerHTML = '<span style="color:var(--err)">✗ 加载失败: ' + e + '</span>';
             });
     },
 
@@ -2144,14 +2329,14 @@ var App = {
             var el = document.getElementById('runtimeBanner');
             if (!el) return;
             if (d.mode === 'custom') {
-                el.innerHTML = '<span style="color:#74b9ff">●</span> 自定义 API：'
+                el.innerHTML = '<span style="color:var(--info)">●</span> 自定义 API：'
                              + '<span style="font-family:monospace">' + (d.model || '') + '</span>'
-                             + ' <span style="color:#6a6a80">切换 ▾</span>';
+                             + ' <span style="color:var(--text-mute)">切换 ▾</span>';
                 el.title = (d.baseUrl || '') + '（点击切换模型来源）';
             } else {
                 var st = d.localStatus || {};
-                var dot = st.running ? '<span style="color:#00b894">●</span>'
-                                     : '<span style="color:#6a6a80">○</span>';
+                var dot = st.running ? '<span style="color:var(--ok)">●</span>'
+                                     : '<span style="color:var(--text-mute)">○</span>';
                 var txt = st.running ? '已加载' : '未加载';
                 // 正在下载你选的那份权重时，横幅里直接报进度，
                 // 不然用户只看到“未加载”，以为没动静。
@@ -2161,10 +2346,10 @@ var App = {
                         ? '正在下载 ' + Math.floor((st.downloadBytes || 0) * 100 / st.downloadTotal)
                           + '%（' + dmb + '/' + Math.floor(st.downloadTotal / 1048576) + ' MB）'
                         : '正在下载（已下 ' + dmb + ' MB）';
-                    dot = '<span style="color:#fdcb6e">●</span>';
+                    dot = '<span style="color:var(--warn)">●</span>';
                 }
                 el.innerHTML = dot + ' 本地模型：' + (d.model || '')
-                             + ' <span style="color:#6a6a80">' + txt + ' · 切换 ▾</span>';
+                             + ' <span style="color:var(--text-mute)">' + txt + ' · 切换 ▾</span>';
                 el.title = (d.baseUrl || '') + '（点击切换模型来源）';
                 // 下载中的进度由 App.tickLocal 统一刷（进度条 + 横幅一起动）
                 if (st.phase === 'downloading') { App.startLocalWatcher(); }
@@ -2242,20 +2427,20 @@ var App = {
         // ---- 收起时的那一行 ----
         var dot, line;
         if (downloading) {
-            dot = '<span style="color:#fdcb6e">●</span>';
-            line = '正在下载 <b style="color:#e8e8f0">' + App.escapeHtml(dfile || cur) + '</b>';
+            dot = '<span style="color:var(--warn)">●</span>';
+            line = '正在下载 <b style="color:var(--text)">' + App.escapeHtml(dfile || cur) + '</b>';
         } else if (phase === 'failed') {
-            dot = '<span style="color:#e17055">●</span>';
+            dot = '<span style="color:var(--err)">●</span>';
             line = '下载失败：' + App.escapeHtml(st.lastError || '看日志');
         } else if (missing) {
-            dot = '<span style="color:#e17055">●</span>';
-            line = '你选的 <b style="color:#e8e8f0">' + App.escapeHtml(curLabel)
+            dot = '<span style="color:var(--err)">●</span>';
+            line = '你选的 <b style="color:var(--text)">' + App.escapeHtml(curLabel)
                  + '</b> 还没下载（' + (curRow.sizeText || (curRow.sizeGb + ' GB')) + '）'
                  + (st.running ? '，现在临时在用别的' : '');
         } else {
-            dot = st.running ? '<span style="color:#00b894">●</span>' : '<span style="color:#6a6a80">○</span>';
-            line = '本地模型：<b style="color:#e8e8f0">' + App.escapeHtml(curLabel) + '</b>'
-                 + ' <span style="color:#6a6a80">'
+            dot = st.running ? '<span style="color:var(--ok)">●</span>' : '<span style="color:var(--text-mute)">○</span>';
+            line = '本地模型：<b style="color:var(--text)">' + App.escapeHtml(curLabel) + '</b>'
+                 + ' <span style="color:var(--text-mute)">'
                  + (st.running ? '正在用' : '已就绪（发消息时加载）') + '</span>';
         }
         html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
@@ -2272,13 +2457,13 @@ var App = {
             var pct = total > 0 ? Math.floor(bytes * 100 / total) : 0;
             var speedTxt = App._dlSpeedTxt || '';
             html += '<div style="display:flex;align-items:center;gap:10px;margin-top:8px">'
-                 +  '<div style="flex:1;height:10px;background:#12121f;border:1px solid #2d2d4a;'
+                 +  '<div style="flex:1;height:10px;background:var(--inset);border:1px solid var(--border);'
                  +  'border-radius:5px;overflow:hidden;min-width:120px">'
                  +  '<div id="mpFill" style="height:100%;width:' + pct + '%;'
-                 +  'background:linear-gradient(90deg,#6c5ce7,#00b894);transition:width .4s"></div></div>'
-                 +  '<span style="color:#fdcb6e;font-variant-numeric:tabular-nums;width:42px;'
+                 +  'background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .4s"></div></div>'
+                 +  '<span style="color:var(--warn);font-variant-numeric:tabular-nums;width:42px;'
                  +  'text-align:right">' + pct + '%</span>'
-                 +  '<span style="color:#a0a0b8;white-space:nowrap">' + App.mbText(bytes)
+                 +  '<span style="color:var(--text-dim);white-space:nowrap">' + App.mbText(bytes)
                  +  (total > 0 ? ' / ' + App.mbText(total) : '')
                  +  (speedTxt ? ' · ' + speedTxt : '') + '</span>'
                  +  '</div>';
@@ -2290,19 +2475,19 @@ var App = {
             for (var k = 0; k < models.length; k++) {
                 var m = models[k];
                 var tag = '';
-                if (m.current) { tag = ' <span style="color:#6c5ce7">· 正在用</span>'; }
-                else if (m.configured) { tag = ' <span style="color:#6c5ce7">· 已选中</span>'; }
-                if (m.downloading) { tag += ' <span style="color:#fdcb6e">· 正在下载</span>'; }
-                else if (!m.downloaded) { tag += ' <span style="color:#6a6a80">· 未下载</span>'; }
+                if (m.current) { tag = ' <span style="color:var(--accent)">· 正在用</span>'; }
+                else if (m.configured) { tag = ' <span style="color:var(--accent)">· 已选中</span>'; }
+                if (m.downloading) { tag += ' <span style="color:var(--warn)">· 正在下载</span>'; }
+                else if (!m.downloaded) { tag += ' <span style="color:var(--text-mute)">· 未下载</span>'; }
                 html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
-                     +  'padding:5px 8px;background:#12121f;border:1px solid #23233a;border-radius:6px">'
-                     +  '<span style="flex:1;min-width:200px;color:#e8e8f0">'
+                     +  'padding:5px 8px;background:var(--inset);border:1px solid var(--border-soft);border-radius:6px">'
+                     +  '<span style="flex:1;min-width:200px;color:var(--text)">'
                      +  App.escapeHtml(m.label) + tag
-                     +  ' <span style="color:#6a6a80;font-size:11px">'
+                     +  ' <span style="color:var(--text-mute);font-size:11px">'
                      +  (m.sizeText || (m.sizeGb + ' GB')) + (m.custom ? ' · 你放进去的' : '')
                      +  '</span></span>';
                 if (m.downloading) {
-                    html += '<span style="color:#fdcb6e;font-size:11.5px">下载中…</span>';
+                    html += '<span style="color:var(--warn);font-size:11.5px">下载中…</span>';
                 } else {
                     if (!m.downloaded) {
                         html += '<button class="btn btn-sm" onclick="App.downloadLlamaModel(\''
@@ -2317,7 +2502,7 @@ var App = {
                 html += '</div>';
             }
             html += '</div>';
-            html += '<div style="margin-top:7px;font-size:11px;color:#6a6a80">'
+            html += '<div style="margin-top:7px;font-size:11px;color:var(--text-mute)">'
                  +  '模型目录：<span style="font-family:monospace">'
                  +  App.escapeHtml(st.modelDir || '') + '</span>'
                  +  ' —— 自己的 .gguf 丢进去，点「📂 文件夹」就能打开；'
@@ -2356,7 +2541,7 @@ var App = {
             App._dlSpeedTxt = speedTxt;      // 前台面板也用这一份速度/剩余时间
 
             bar.style.display = 'block';
-            bar.style.background = '#1a1a2e';
+            bar.style.background = 'var(--panel-2)';
             document.getElementById('dlIcon').textContent = '⏳';
             document.getElementById('dlText').textContent = '正在下载 ' + file;
             document.getElementById('dlFill').style.width = pct + '%';
@@ -2379,7 +2564,7 @@ var App = {
             var done = !!st.modelInstalled;
             var failed = phase === 'failed';
             bar.style.display = 'block';
-            bar.style.background = failed ? '#2a1f1c' : '#16261f';
+            bar.style.background = failed ? 'var(--err-bg)' : 'var(--ok-bg)';
             document.getElementById('dlIcon').textContent = failed ? '✗' : '✓';
             document.getElementById('dlText').textContent = failed
                 ? ('下载失败：' + (st.lastError || '原因见日志'))
@@ -2425,14 +2610,14 @@ var App = {
     // ====== 审批策略页签 ======
     renderApprovalsTab: function() {
         var box = document.getElementById('settingsContent');
-        box.innerHTML = '<p style="color:#a0a0b8">正在加载工具列表…</p>';
+        box.innerHTML = '<p style="color:var(--text-dim)">正在加载工具列表…</p>';
         fetch('/api/approvals').then(function(r) { return r.json(); }).then(function(result) {
-            if (!result.success) { box.innerHTML = '<p style="color:#e17055">加载失败: ' + (result.error || '') + '</p>'; return; }
-            var html = '<p style="color:#a0a0b8;margin-bottom:12px">审批策略在Agent执行工具前强制检查。默认全部自动批准；设为「需确认」的工具会被拒绝执行并提示，设为「禁止」的工具不可用。</p>';
+            if (!result.success) { box.innerHTML = '<p style="color:var(--err)">加载失败: ' + (result.error || '') + '</p>'; return; }
+            var html = '<p style="color:var(--text-dim);margin-bottom:12px">审批策略在Agent执行工具前强制检查。默认全部自动批准；设为「需确认」的工具会被拒绝执行并提示，设为「禁止」的工具不可用。</p>';
             (result.data || []).forEach(function(t) {
-                html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:6px;background:#1a1a2e;border:1px solid #2d2d4a;border-radius:8px">'
+                html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:6px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px">'
                     + '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">' + t.toolName + '</div>'
-                    + '<div style="font-size:11px;color:#6a6a80;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (t.description || '') + '</div></div>'
+                    + '<div style="font-size:11px;color:var(--text-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (t.description || '') + '</div></div>'
                     + '<select onchange="App.setToolPolicy(\'' + t.toolId + '\', this.value)" style="flex-shrink:0">'
                     + '<option value="AUTO_APPROVE"' + (t.policy === 'AUTO_APPROVE' ? ' selected' : '') + '>自动批准</option>'
                     + '<option value="CONFIRM"' + (t.policy === 'CONFIRM' ? ' selected' : '') + '>需确认</option>'
@@ -2440,7 +2625,7 @@ var App = {
                     + '</select></div>';
             });
             box.innerHTML = html;
-        }).catch(function() { box.innerHTML = '<p style="color:#e17055">加载失败</p>'; });
+        }).catch(function() { box.innerHTML = '<p style="color:var(--err)">加载失败</p>'; });
     },
 
     setToolPolicy: function(toolId, policy) {
@@ -2516,6 +2701,712 @@ var App = {
                 thinkingLevel: tl.disabled ? '' : tl.value
             })
         }).catch(function() {});
+    },
+
+    // ====== 界面主题（黑灰 / 白灰两套，设置里切换，立即生效、刷新后保持）======
+    /** 用户选的主题：'auto' | 'dark' | 'light'（存在 localStorage） */
+    themeChoice: function() {
+        try {
+            var v = localStorage.getItem('lionbox.theme');
+            return (v === 'dark' || v === 'light') ? v : 'auto';
+        } catch (e) { return 'auto'; }        // 隐私模式读不了 localStorage 就当跟随系统
+    },
+
+    /** 系统当前偏好（拿不到 matchMedia 就当暗色） */
+    systemTheme: function() {
+        try {
+            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                return 'light';
+            }
+        } catch (e) { /* 老浏览器没有 matchMedia */ }
+        return 'dark';
+    },
+
+    /** auto → 跟随系统 */
+    effectiveTheme: function(pref) {
+        var p = pref || this.themeChoice();
+        return (p === 'auto') ? this.systemTheme() : p;
+    },
+
+    /**
+     * 把主题挂到 <html data-theme>。所有颜色都是 CSS 变量，所以这里改完**立即生效**，
+     * 不用刷新，也不需要两套重复样式。
+     */
+    applyTheme: function(pref) {
+        var p = pref || this.themeChoice();
+        var eff = this.effectiveTheme(p);
+        this.themePref = p;
+        this.themeEffective = eff;
+        try {
+            if (document.documentElement && document.documentElement.setAttribute) {
+                document.documentElement.setAttribute('data-theme', eff);
+            }
+            if (document.body && document.body.setAttribute) {
+                document.body.setAttribute('data-theme', eff);
+            }
+        } catch (e) { /* 挂不上也不影响别的功能 */ }
+        return eff;
+    },
+
+    /** 设置 → 界面：点「暗色 / 亮色 / 跟随系统」 */
+    setTheme: function(pref) {
+        if (pref !== 'dark' && pref !== 'light') { pref = 'auto'; }
+        try { localStorage.setItem('lionbox.theme', pref); } catch (e) { /* 存不下就只生效这一次 */ }
+        this.applyTheme(pref);
+        if (this.currentSettingsTab === 'appearance') { this.renderAppearanceTab(); }
+    },
+
+    /** 启动时恢复上次的选择；选了「跟随系统」就跟着系统变 */
+    initTheme: function() {
+        var self = this;
+        this.applyTheme(this.themeChoice());
+        try {
+            if (window.matchMedia) {
+                var mq = window.matchMedia('(prefers-color-scheme: light)');
+                var onChange = function() {
+                    if (self.themeChoice() === 'auto') { self.applyTheme('auto'); }
+                };
+                if (mq.addEventListener) { mq.addEventListener('change', onChange); }
+                else if (mq.addListener) { mq.addListener(onChange); }
+            }
+        } catch (e) { /* 监听不上也没关系，下次刷新按系统走 */ }
+    },
+
+    renderAppearanceTab: function() {
+        var box = document.getElementById('settingsContent');
+        if (!box) return;
+        var cur = this.themeChoice();
+        function card(code, title, desc, swatch) {
+            var on = (cur === code);
+            return '<button class="theme-card' + (on ? ' active' : '') + '" onclick="App.setTheme(\'' + code + '\')">'
+                 +   '<span class="theme-swatch" style="background:' + swatch + '"></span>'
+                 +   '<span class="grow"><span class="set-name">' + title + '</span>'
+                 +   '<span class="set-desc">' + desc + '</span></span>'
+                 +   '<span class="theme-check">' + (on ? '✓' : '') + '</span>'
+                 + '</button>';
+        }
+        var html = '<div class="set-block">'
+            + '<div class="set-block-head"><div class="set-block-title">主题</div>'
+            + '<span class="set-msg">当前生效：' + (this.themeEffective === 'light' ? '亮色（白 + 偏灰）' : '暗色（黑 + 灰）') + '</span></div>'
+            + card('dark', '暗色（黑 + 灰）', '近黑底 + 灰面板，长时间看代码不刺眼', 'var(--sw-dark)')
+            + card('light', '亮色（白 + 偏灰）', '白底 + 浅灰面板，白天或投屏时更清楚', 'var(--sw-light)')
+            + card('auto', '跟随系统', '系统是深色就用暗色，是浅色就用亮色',
+                   'linear-gradient(90deg,var(--sw-dark) 50%,var(--sw-light) 50%)')
+            + '<div class="set-note" style="margin-top:8px">换主题立即生效，不用刷新；'
+            + '选择记在本机（localStorage），下次打开还是这一套。</div>'
+            + '</div>';
+        box.innerHTML = html;
+    },
+
+    // ====== 设置：插件 ======
+    /** 后端两种返回都认：新的 {ok:true,...} 和旧的 {success:true,data:...} */
+    respOk: function(res) {
+        if (!res) return false;
+        if (res.ok === true) return true;
+        if (res.ok === false) return false;
+        return res.success === true;
+    },
+
+    /** 从响应里取数组：新契约在 plugins/skills/items 字段，旧契约在 data 里 */
+    respList: function(res, key) {
+        if (!res) return null;
+        if (res[key] && res[key].length !== undefined) { return res[key]; }
+        if (res.data && res.data.length !== undefined) { return res.data; }
+        if (res.data && res.data[key] && res.data[key].length !== undefined) { return res.data[key]; }
+        if (res.items && res.items.length !== undefined) { return res.items; }
+        return null;
+    },
+
+    /** 插件分类中文名：优先用后端给的 kinds，其次内置默认表 */
+    kindLabel: function(kind, kinds) {
+        var k = String(kind || '').toUpperCase();
+        var list = kinds || [];
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].code || '').toUpperCase() === k) { return list[i].label || list[i].code; }
+        }
+        var def = { TOOL: '工具', SKILL: '技能', PROVIDER: '模型来源', HOOK: '钩子', EXTENSION: '扩展' };
+        return def[k] || (kind || '其他');
+    },
+
+    /**
+     * 来源怎么显示：内置 / 外置。
+     * 优先后端的 builtin 布尔值；只有旧接口（没有 builtin，只给 source 字符串）时才看 source。
+     * 有的后端在 source 里塞的是文件路径，那种一律算"外置"（放在插件目录里的），
+     * 完整路径挂在 title 上，想看细节鼠标停一下就出来。
+     */
+    sourceLabel: function(it) {
+        if (it && it.builtin === true) { return '内置'; }
+        if (it && it.builtin === false) { return '外置'; }
+        var s = (it && it.source) ? String(it.source) : '';
+        if (!s) { return '内置'; }          // 旧接口不给 builtin/source：注册表里的都是随程序带的内置插件
+        if (s.indexOf('\\') >= 0 || s.indexOf('/') >= 0) { return '外置'; }
+        var u = s.toUpperCase();
+        if (u === 'BUILTIN') { return '内置'; }
+        if (u === 'EXTERNAL') { return '外置'; }
+        return s;
+    },
+
+    /** 来源的完整原始值（路径那种当 tooltip 用） */
+    sourceTitle: function(it) {
+        var s = (it && it.source) ? String(it.source) : '';
+        return (s.indexOf('\\') >= 0 || s.indexOf('/') >= 0) ? s : '';
+    },
+
+    /** 后端还没就绪时的兜底文案：说清楚是哪个接口失败，不影响别的功能 */
+    notReady: function(what, api, res) {
+        var why = (res && (res.error || res.message)) ? ('后端返回：' + (res.error || res.message)) : '接口还没实现或请求失败';
+        return '<div class="set-block"><div class="set-block-title">' + what + '</div>'
+             + '<div class="set-note" style="margin-top:6px">该功能的后端还没就绪（'
+             + this.escapeHtml(api) + '：' + this.escapeHtml(String(why))
+             + '）。聊天、工具调用、模型设置都不受影响。</div></div>';
+    },
+
+    renderPluginsTab: function() {
+        var self = this;
+        var box = document.getElementById('settingsContent');
+        if (!box) return;
+        box.innerHTML = '<p class="set-note">正在加载插件列表…</p>';
+        fetch('/api/plugins').then(function(r) { return r.json(); }).then(function(res) {
+            if (!self.respOk(res)) { box.innerHTML = self.notReady('插件', 'GET /api/plugins', res); return; }
+            self.pluginsData = self.respList(res, 'plugins') || [];
+            self.pluginKinds = res.kinds || ((res.data && res.data.kinds) || []);
+            self.pluginDevMode = (res.devMode === true) || !!(res.data && res.data.devMode === true);
+            self.pluginsDir = res.pluginsDir || ((res.data && res.data.pluginsDir) || '');
+            box.innerHTML = self.pluginsTabHtml();
+        }).catch(function() {
+            box.innerHTML = self.notReady('插件', 'GET /api/plugins');
+        });
+    },
+
+    pluginsTabHtml: function() {
+        var self = this;
+        var plugins = this.pluginsData || [];
+        var kinds = this.pluginKinds || [];
+        var html = '<div class="set-block">'
+            + '<div class="set-block-head">'
+            +   '<div class="set-block-title">插件（' + plugins.length + '）</div>'
+            +   '<button class="btn btn-sm" onclick="App.reloadPlugins()">↻ 重新加载插件</button>'
+            + '</div>'
+            + '<label class="set-row" style="cursor:pointer">'
+            +   '<span class="grow"><span class="set-name">插件开发模式</span>'
+            +   '<span class="set-desc">打开后可以在下面生成插件骨架；改完代码重新加载即可生效</span></span>'
+            +   '<span class="switch"><input type="checkbox" id="pluginDevMode"' + (this.pluginDevMode ? ' checked' : '')
+            +     ' onchange="App.setPluginDevMode(this.checked)"><span class="knob"></span></span>'
+            + '</label>'
+            + '<div class="set-msg" id="pluginTabMsg">'
+            +   (this.pluginsDir ? ('插件目录：<span style="font-family:monospace">' + this.escapeHtml(this.pluginsDir) + '</span>') : '')
+            + '</div>';
+
+        // 按 kind 分组：顺序按后端给的 kinds，后端没给过的分类排后面
+        var order = [];
+        kinds.forEach(function(k) { order.push(String(k.code || '').toUpperCase()); });
+        var groups = {};
+        plugins.forEach(function(p) {
+            var k = String(p.kind || p.type || 'OTHER').toUpperCase();
+            if (!groups[k]) { groups[k] = []; if (order.indexOf(k) < 0) { order.push(k); } }
+            groups[k].push(p);
+        });
+        order.forEach(function(k) {
+            var items = groups[k];
+            if (!items || !items.length) { return; }
+            html += '<div class="set-group-title">' + self.escapeHtml(self.kindLabel(k, kinds)) + '（' + items.length + '）</div>';
+            items.forEach(function(p) { html += self.pluginRow(p); });
+        });
+        if (!plugins.length) {
+            html += '<div class="set-note" style="margin-top:6px">后端没返回任何插件。</div>';
+        }
+
+        // 开发模式：生成插件骨架
+        if (this.pluginDevMode) {
+            var opts = kinds.length ? kinds : [{code: 'TOOL', label: '工具'}, {code: 'SKILL', label: '技能'}];
+            html += '<div class="set-group-title">生成插件骨架</div>'
+                 +  '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+                 +    '<input class="set-input" id="pfId" style="flex:1;min-width:150px" placeholder="插件 id（英文，如 my_tool）">'
+                 +    '<input class="set-input" id="pfName" style="flex:1;min-width:150px" placeholder="显示名称">'
+                 +    '<select class="set-input" id="pfKind" style="width:120px">';
+            opts.forEach(function(k) {
+                html += '<option value="' + self.escapeAttr(k.code) + '">' + self.escapeHtml(k.label || k.code) + '</option>';
+            });
+            html += '</select>'
+                 +    '<button class="btn btn-sm btn-primary" onclick="App.scaffoldPlugin()">生成骨架</button>'
+                 +  '</div>'
+                 +  '<div class="set-msg" id="pfMsg" style="margin-top:6px"></div>';
+        }
+        html += '</div>';
+        return html;
+    },
+
+    pluginRow: function(p) {
+        var on = p.enabled !== false;
+        var src = this.sourceLabel(p);
+        return '<div class="set-row">'
+            +   '<span class="grow">'
+            +     '<span class="set-name">' + this.escapeHtml(p.displayName || p.name || p.id) + '</span>'
+            +     (p.description ? '<span class="set-desc">' + this.escapeHtml(p.description) + '</span>' : '')
+            +     (p.error ? '<span class="set-err">✗ ' + this.escapeHtml(String(p.error)) + '</span>' : '')
+            +   '</span>'
+            +   '<span class="set-badge" title="' + this.escapeAttr(this.sourceTitle(p)) + '">' + this.escapeHtml(src)
+            +     (p.version ? (' · ' + this.escapeHtml(String(p.version))) : '') + '</span>'
+            +   '<span class="switch"><input type="checkbox" id="plug_' + this.escapeAttr(p.id) + '"'
+            +     (on ? ' checked' : '') + ' onchange="App.togglePlugin(\'' + this.escapeAttr(p.id)
+            +     '\', this.checked, this)"><span class="knob"></span></span>'
+            + '</div>';
+    },
+
+    /** 单个插件开关：成功后就地更新；失败把开关拨回去并说明原因 */
+    togglePlugin: function(id, enable, el) {
+        var self = this;
+        var msg = document.getElementById('pluginTabMsg');
+        if (el) { el.disabled = true; }
+        if (msg) { msg.className = 'set-msg'; msg.textContent = (enable ? '正在启用 ' : '正在禁用 ') + id + ' …'; }
+        fetch('/api/plugins/' + encodeURIComponent(id) + '/' + (enable ? 'enable' : 'disable'), {method: 'POST'})
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (el) { el.disabled = false; }
+            if (!self.respOk(res)) { throw new Error((res && (res.error || res.message)) || '请求失败'); }
+            (self.pluginsData || []).forEach(function(p) { if (p.id === id) { p.enabled = enable; } });
+            if (msg) { msg.className = 'set-msg ok'; msg.textContent = '✓ ' + id + (enable ? ' 已启用' : ' 已禁用'); }
+            self.loadPlugins();
+          })
+          .catch(function(e) {
+            if (el) { el.disabled = false; el.checked = !enable; }         // 回滚
+            if (msg) {
+                msg.className = 'set-msg err';
+                msg.textContent = '✗ ' + id + (enable ? ' 启用失败：' : ' 禁用失败：') + (e && e.message ? e.message : e);
+            }
+          });
+    },
+
+    reloadPlugins: function() {
+        var self = this;
+        var msg = document.getElementById('pluginTabMsg');
+        if (msg) { msg.className = 'set-msg'; msg.textContent = '正在重新加载插件…'; }
+        fetch('/api/plugins/reload', {method: 'POST'})
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (!self.respOk(res)) { throw new Error((res && res.error) || '请求失败'); }
+            var list = self.respList(res, 'plugins');
+            if (list) { self.pluginsData = list; }
+            else { self.renderPluginsTab(); return; }
+            var box = document.getElementById('settingsContent');
+            if (box) { box.innerHTML = self.pluginsTabHtml(); }
+            var m = document.getElementById('pluginTabMsg');
+            if (m) {
+                m.className = 'set-msg ok';
+                m.textContent = '✓ 插件已重新加载'
+                    + ((res.count === undefined || res.count === null) ? '' : ('，共 ' + res.count + ' 个'));
+            }
+            self.loadPlugins();
+          })
+          .catch(function(e) {
+            var m = document.getElementById('pluginTabMsg');
+            if (m) { m.className = 'set-msg err'; m.textContent = '✗ 重新加载失败：' + (e && e.message ? e.message : e); }
+          });
+    },
+
+    setPluginDevMode: function(enabled) {
+        var self = this;
+        var msg = document.getElementById('pluginTabMsg');
+        fetch('/api/plugins/dev-mode', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled: !!enabled})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!self.respOk(res)) { throw new Error((res && res.error) || '请求失败'); }
+            self.pluginDevMode = !!enabled;
+            var box = document.getElementById('settingsContent');
+            if (box) { box.innerHTML = self.pluginsTabHtml(); }
+            var m = document.getElementById('pluginTabMsg');
+            if (m) { m.className = 'set-msg ok'; m.textContent = '✓ 插件开发模式已' + (enabled ? '打开' : '关闭'); }
+        }).catch(function(e) {
+            var el = document.getElementById('pluginDevMode');
+            if (el) { el.checked = !enabled; }
+            if (msg) { msg.className = 'set-msg err'; msg.textContent = '✗ 切换失败：' + (e && e.message ? e.message : e); }
+        });
+    },
+
+    scaffoldPlugin: function() {
+        var self = this;
+        var idEl = document.getElementById('pfId');
+        var nameEl = document.getElementById('pfName');
+        var kindEl = document.getElementById('pfKind');
+        var id = ((idEl && idEl.value) || '').trim();
+        var name = ((nameEl && nameEl.value) || '').trim();
+        var kind = (kindEl && kindEl.value) || 'TOOL';
+        var msg = document.getElementById('pfMsg');
+        if (!id) { if (msg) { msg.className = 'set-msg err'; msg.textContent = '先填插件 id'; } return; }
+        if (msg) { msg.className = 'set-msg'; msg.textContent = '正在生成…'; }
+        fetch('/api/plugins/scaffold', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: id, name: name || id, kind: kind})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!self.respOk(res)) { throw new Error((res && res.error) || '请求失败'); }
+            var path = res.path || ((res.data && res.data.path) || '');
+            if (msg) { msg.className = 'set-msg ok'; msg.textContent = '✓ 已生成：' + path; }
+            self.reloadPlugins();
+        }).catch(function(e) {
+            if (msg) { msg.className = 'set-msg err'; msg.textContent = '✗ 生成失败：' + (e && e.message ? e.message : e); }
+        });
+    },
+
+    // ====== 设置：技能 ======
+    renderSkillsTab: function() {
+        var self = this;
+        var box = document.getElementById('settingsContent');
+        if (!box) return;
+        box.innerHTML = '<p class="set-note">正在加载技能列表…</p>';
+        fetch('/api/skills').then(function(r) { return r.json(); }).then(function(res) {
+            if (!self.respOk(res)) { box.innerHTML = self.notReady('技能', 'GET /api/skills', res); return; }
+            self.skillsData = self.respList(res, 'skills') || [];
+            box.innerHTML = self.skillsTabHtml();
+            self.loadActiveSkills();
+        }).catch(function() {
+            box.innerHTML = self.notReady('技能', 'GET /api/skills');
+        });
+    },
+
+    skillsTabHtml: function() {
+        var self = this;
+        var skills = this.skillsData || [];
+        var pinned = this.activeSkills || [];
+        var html = '<div class="set-block">'
+            + '<div class="set-block-head">'
+            +   '<div class="set-block-title">技能（' + skills.length + '）</div>'
+            +   '<button class="btn btn-sm" onclick="App.reloadSkills()">↻ 重新加载技能</button>'
+            + '</div>'
+            + '<div class="set-note">当前会话指定使用（指定后这条会话会带上这些技能）：</div>'
+            + '<div id="skillPinned" style="margin:6px 0 4px">' + this.skillPinnedHtml() + '</div>'
+            + '<div class="set-msg" id="skillTabMsg"></div>';
+        if (!skills.length) {
+            html += '<div class="set-note" style="margin-top:6px">后端没返回任何技能。</div>';
+        }
+        skills.forEach(function(s) { html += self.skillRow(s); });
+        html += '</div>';
+        return html;
+    },
+
+    skillPinnedHtml: function() {
+        var self = this;
+        var skills = this.skillsData || [];
+        var pinned = this.activeSkills || [];
+        if (!pinned.length) {
+            return '<span class="set-msg">' + (this.sessionId ? '还没有指定技能' : '还没有会话，先发一条消息再指定') + '</span>';
+        }
+        var html = '';
+        pinned.forEach(function(id) {
+            var s = null;
+            skills.forEach(function(x) { if (x.id === id) { s = x; } });
+            html += '<span class="tag" title="' + self.escapeAttr(id) + '">'
+                 +   self.escapeHtml((s && (s.displayName || s.name)) || id)
+                 +   '<button title="取消指定" onclick="App.unpinSkill(\'' + self.escapeAttr(id) + '\')">×</button>'
+                 + '</span>';
+        });
+        return html;
+    },
+
+    renderSkillPinned: function() {
+        var box = document.getElementById('skillPinned');
+        if (!box) return;
+        box.innerHTML = this.skillPinnedHtml();
+    },
+
+    skillRow: function(s) {
+        var on = s.enabled !== false;
+        var pinned = (this.activeSkills || []).indexOf(s.id) >= 0;
+        var src = this.sourceLabel(s);
+        return '<div class="set-row">'
+            +   '<span class="grow">'
+            +     '<span class="set-name">' + this.escapeHtml(s.displayName || s.name || s.id) + '</span>'
+            +     (s.description ? '<span class="set-desc">' + this.escapeHtml(s.description) + '</span>' : '')
+            +     (s.whenToUse ? '<span class="set-desc">适用：' + this.escapeHtml(s.whenToUse) + '</span>' : '')
+            +     (s.error ? '<span class="set-err">✗ ' + this.escapeHtml(String(s.error)) + '</span>' : '')
+            +   '</span>'
+            +   '<span class="set-badge" title="' + this.escapeAttr(this.sourceTitle(s)) + '">' + this.escapeHtml(src)
+            +     (s.mode ? (' · ' + this.escapeHtml(String(s.mode))) : '') + '</span>'
+            +   '<button class="btn btn-sm" onclick="App.' + (pinned ? 'unpinSkill' : 'pinSkill')
+            +     '(\'' + this.escapeAttr(s.id) + '\')">' + (pinned ? '取消指定' : '指定使用') + '</button>'
+            +   '<span class="switch"><input type="checkbox" id="skill_' + this.escapeAttr(s.id) + '"'
+            +     (on ? ' checked' : '') + ' onchange="App.toggleSkill(\'' + this.escapeAttr(s.id)
+            +     '\', this.checked, this)"><span class="knob"></span></span>'
+            + '</div>';
+    },
+
+    toggleSkill: function(id, enable, el) {
+        var self = this;
+        var msg = document.getElementById('skillTabMsg');
+        if (el) { el.disabled = true; }
+        if (msg) { msg.className = 'set-msg'; msg.textContent = (enable ? '正在启用 ' : '正在禁用 ') + id + ' …'; }
+        fetch('/api/skills/' + encodeURIComponent(id) + '/' + (enable ? 'enable' : 'disable'), {method: 'POST'})
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (el) { el.disabled = false; }
+            if (!self.respOk(res)) { throw new Error((res && (res.error || res.message)) || '请求失败'); }
+            (self.skillsData || []).forEach(function(s) { if (s.id === id) { s.enabled = enable; } });
+            var m = document.getElementById('skillTabMsg');
+            if (m) { m.className = 'set-msg ok'; m.textContent = '✓ ' + id + (enable ? ' 已启用' : ' 已禁用'); }
+          })
+          .catch(function(e) {
+            if (el) { el.disabled = false; el.checked = !enable; }         // 回滚
+            var m = document.getElementById('skillTabMsg');
+            if (m) {
+                m.className = 'set-msg err';
+                m.textContent = '✗ ' + id + (enable ? ' 启用失败：' : ' 禁用失败：') + (e && e.message ? e.message : e);
+            }
+          });
+    },
+
+    reloadSkills: function() {
+        var self = this;
+        var msg = document.getElementById('skillTabMsg');
+        if (msg) { msg.className = 'set-msg'; msg.textContent = '正在重新加载技能…'; }
+        fetch('/api/skills/reload', {method: 'POST'})
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (!self.respOk(res)) { throw new Error((res && res.error) || '请求失败'); }
+            var list = self.respList(res, 'skills');
+            if (list) { self.skillsData = list; }
+            var box = document.getElementById('settingsContent');
+            if (box) { box.innerHTML = self.skillsTabHtml(); }
+            var m = document.getElementById('skillTabMsg');
+            if (m) { m.className = 'set-msg ok'; m.textContent = '✓ 技能已重新加载'; }
+          })
+          .catch(function(e) {
+            var m = document.getElementById('skillTabMsg');
+            if (m) { m.className = 'set-msg err'; m.textContent = '✗ 重新加载失败：' + (e && e.message ? e.message : e); }
+          });
+    },
+
+    /** 当前会话钉住了哪些技能 */
+    loadActiveSkills: function() {
+        var self = this;
+        if (!this.sessionId) { this.activeSkills = []; this.renderSkillPinned(); return; }
+        fetch('/api/skills/active?sessionId=' + encodeURIComponent(this.sessionId))
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (!self.respOk(res)) { return; }
+            var list = self.respList(res, 'skills') || [];
+            self.activeSkills = list.map(function(x) {
+                return (typeof x === 'string') ? x : (x && x.id);
+            }).filter(function(x) { return !!x; });
+            self.renderSkillPinned();
+          })
+          .catch(function() { /* 拿不到就不显示钉住的技能，别的照常用 */ });
+    },
+
+    pinSkill: function(id) {
+        this.activeSkills = this.activeSkills || [];
+        if (this.activeSkills.indexOf(id) < 0) { this.activeSkills.push(id); }
+        this.saveActiveSkills();
+    },
+
+    unpinSkill: function(id) {
+        this.activeSkills = (this.activeSkills || []).filter(function(x) { return x !== id; });
+        this.saveActiveSkills();
+    },
+
+    saveActiveSkills: function() {
+        var self = this;
+        if (!this.sessionId) {
+            var m0 = document.getElementById('skillTabMsg');
+            if (m0) { m0.className = 'set-msg err'; m0.textContent = '还没有会话，先发一条消息再指定'; }
+            return;
+        }
+        var msg = document.getElementById('skillTabMsg');
+        if (msg) { msg.className = 'set-msg'; msg.textContent = '正在保存…'; }
+        fetch('/api/skills/active', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({sessionId: this.sessionId, skills: this.activeSkills || []})
+        }).then(function(r) { return r.json(); }).then(function(res) {
+            if (!self.respOk(res)) { throw new Error((res && res.error) || '请求失败'); }
+            var box = document.getElementById('settingsContent');      // 按钮文字要跟着变
+            if (box) { box.innerHTML = self.skillsTabHtml(); }
+            var m = document.getElementById('skillTabMsg');
+            if (m) { m.className = 'set-msg ok'; m.textContent = '✓ 已更新当前会话指定的技能'; }
+        }).catch(function(e) {
+            var m = document.getElementById('skillTabMsg');
+            if (m) { m.className = 'set-msg err'; m.textContent = '✗ 保存失败：' + (e && e.message ? e.message : e); }
+        });
+    },
+
+    // ====== 输入框 @ 补全（文件 / 历史对话 / 技能）======
+    /** 输入变化：刷新引用小标签 + 决定要不要弹候选 */
+    onInputChanged: function() {
+        this.renderRefs();
+        this.updateMentionPopup();
+    },
+
+    /** 把正文里的 @file: / @history: / @skill: 抽出来渲染成可删的小标签 */
+    renderRefs: function() {
+        var bar = document.getElementById('refBar');
+        if (!bar) return;
+        var input = document.getElementById('msgInput');
+        var text = (input && input.value) || '';
+        var self = this;
+        var re = /@(file|history|skill):([^\s@]+)/g;
+        var items = [];
+        var m;
+        while ((m = re.exec(text)) !== null) {
+            items.push({ type: m[1], value: m[2], raw: m[0] });
+        }
+        this._refs = items;
+        if (!items.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+        var html = '';
+        items.forEach(function(it, i) {
+            html += '<span class="ref-chip" title="' + self.escapeAttr(it.raw) + '">'
+                 +   '<span class="mi-type">' + self.mentionTypeLabel(it.type) + '</span>'
+                 +   '<span class="t">' + self.escapeHtml(it.value) + '</span>'
+                 +   '<button title="删掉这个引用" onclick="App.removeRef(' + i + ')">×</button>'
+                 + '</span>';
+        });
+        bar.innerHTML = html;
+        bar.style.display = 'flex';
+    },
+
+    /** 点标签上的 ×：把对应的 @xxx 从输入框里删掉 */
+    removeRef: function(index) {
+        var input = document.getElementById('msgInput');
+        if (!input) return;
+        var it = (this._refs || [])[index];
+        if (!it) return;
+        var text = String(input.value || '');
+        var at = text.indexOf(it.raw);
+        if (at >= 0) {
+            var end = at + it.raw.length;
+            if (text.charAt(end) === ' ') { end++; }
+            else if (at > 0 && text.charAt(at - 1) === ' ') { at--; }
+            text = text.slice(0, at) + text.slice(end);
+        }
+        input.value = text;
+        this.renderRefs();
+        if (input.focus) { input.focus(); }
+    },
+
+    mentionTypeLabel: function(t) {
+        var map = { file: '文件', history: '历史', skill: '技能' };
+        return map[t] || (t || '');
+    },
+
+    /** 光标前那个还没写完的 @ 词；没有就返回 null */
+    findMentionToken: function() {
+        var input = document.getElementById('msgInput');
+        if (!input) return null;
+        var text = String(input.value || '');
+        var pos = text.length;
+        if (typeof input.selectionStart === 'number') { pos = input.selectionStart; }
+        var before = text.slice(0, pos);
+        var m = /(^|[\s(（])@([^\s@]{0,40})$/.exec(before);
+        if (!m) return null;
+        return { query: m[2], start: pos - m[2].length - 1, end: pos };
+    },
+
+    /** 输入后 200ms 再查（防抖）：连打几个字只发一次请求 */
+    updateMentionPopup: function() {
+        var self = this;
+        var tok = this.findMentionToken();
+        if (!tok) { this.hideMentionPopup(); return; }
+        if (this._mentionTimer) { clearTimeout(this._mentionTimer); }
+        this._mentionTimer = setTimeout(function() { self.fetchMentions(tok.query); }, 200);
+    },
+
+    /**
+     * 查候选项。请求带序号：慢的旧响应回来时如果已经有更新的请求发出去了，
+     * 直接丢掉 —— 否则会出现"打完字了，列表跳回上一个词的结果"。
+     * 端点不存在 / 报错都只是浮层不出现，绝不弹错误、不挡输入。
+     */
+    fetchMentions: function(query) {
+        var self = this;
+        this._mentionSeq = (this._mentionSeq || 0) + 1;
+        var seq = this._mentionSeq;
+        var url = '/api/context/mentions?q=' + encodeURIComponent(query || '')
+                + '&kind=all&limit=20'
+                + '&root=' + encodeURIComponent(this.ws || '')
+                + (this.sessionId ? ('&sessionId=' + encodeURIComponent(this.sessionId)) : '');
+        try {
+            fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+                if (seq !== self._mentionSeq) { return; }
+                if (!self.respOk(res)) { self.hideMentionPopup(); return; }
+                var items = self.respList(res, 'items') || [];
+                if (!items.length) { self.hideMentionPopup(); return; }
+                self._mentionItems = items;
+                self._mentionIndex = 0;
+                self._mentionToken = self.findMentionToken() || {query: query, start: 0, end: 0};
+                self.renderMentionPopup();
+            }).catch(function() {
+                if (seq === self._mentionSeq) { self.hideMentionPopup(); }
+            });
+        } catch (e) {
+            this.hideMentionPopup();
+        }
+    },
+
+    renderMentionPopup: function() {
+        var pop = document.getElementById('mentionPopup');
+        if (!pop) return;
+        var self = this;
+        var items = this._mentionItems || [];
+        var html = '';
+        items.forEach(function(it, i) {
+            html += '<div class="mention-item' + (i === self._mentionIndex ? ' active' : '') + '"'
+                 +      ' onmousedown="event.preventDefault();App.mentionPick(' + i + ')"'
+                 +      ' onmouseenter="App.mentionHover(' + i + ')">'
+                 +   '<span class="mi-type">' + self.escapeHtml(self.mentionTypeLabel(it.type)) + '</span>'
+                 +   '<span class="mi-label">' + self.escapeHtml(it.label || it.id || it.insert || '') + '</span>'
+                 +   (it.detail ? '<span class="mi-detail">' + self.escapeHtml(String(it.detail)) + '</span>' : '')
+                 + '</div>';
+        });
+        pop.innerHTML = html;
+        pop.style.display = 'block';
+        this._mentionOpen = items.length > 0;
+    },
+
+    hideMentionPopup: function() {
+        this._mentionOpen = false;
+        this._mentionItems = [];
+        this._mentionIndex = 0;
+        var pop = document.getElementById('mentionPopup');
+        if (pop) { pop.style.display = 'none'; pop.innerHTML = ''; }
+    },
+
+    mentionHover: function(i) {
+        this._mentionIndex = i;
+        this.renderMentionPopup();
+    },
+
+    /** 键盘：↑↓ 选择、Enter/Tab 确认、Esc 关闭。返回 true 表示这次按键被浮层吃掉了 */
+    mentionKeydown: function(e) {
+        if (!this._mentionOpen || !(this._mentionItems || []).length) { return false; }
+        var key = e.key;
+        if (key === 'ArrowDown') { this.mentionMove(1); e.preventDefault(); return true; }
+        if (key === 'ArrowUp') { this.mentionMove(-1); e.preventDefault(); return true; }
+        if (key === 'Enter' || key === 'Tab') { this.mentionPick(this._mentionIndex); e.preventDefault(); return true; }
+        if (key === 'Escape') { this.hideMentionPopup(); e.preventDefault(); return true; }
+        return false;
+    },
+
+    mentionMove: function(delta) {
+        var n = (this._mentionItems || []).length;
+        if (!n) return;
+        this._mentionIndex = (this._mentionIndex + delta + n) % n;
+        this.renderMentionPopup();
+    },
+
+    /** 选中一项：把 @ 后面那个词换成后端给的 insert 文本，并显示成小标签 */
+    mentionPick: function(i) {
+        var it = (this._mentionItems || [])[i];
+        if (!it) { this.hideMentionPopup(); return; }
+        var input = document.getElementById('msgInput');
+        if (!input) { this.hideMentionPopup(); return; }
+        var text = String(input.value || '');
+        // 以"此刻光标前的 @ 词"为准（拉候选这段时间用户可能又敲了几个字），拿不到才退回记下的位置
+        var tok = this.findMentionToken() || this._mentionToken || {start: text.length, end: text.length};
+        var insert = String(it.insert || it.id || it.label || '');
+        input.value = text.slice(0, tok.start) + insert + ' ' + text.slice(tok.end);
+        var caret = tok.start + insert.length + 1;
+        if (input.setSelectionRange) {
+            try { input.setSelectionRange(caret, caret); } catch (e) { /* 不支持就算了 */ }
+        }
+        this.hideMentionPopup();
+        this.renderRefs();
+        if (input.focus) { input.focus(); }
     },
 
     // ====== 模态框 ======

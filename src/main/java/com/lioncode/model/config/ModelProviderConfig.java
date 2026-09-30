@@ -47,13 +47,18 @@ public record ModelProviderConfig(
 
     /**
      * 内置提供商模板列表
-     * 
+     *
+     * <p>【为什么加 final】它原来是 {@code public static}（非 final）的**可变静态字段**：
+     * 任何代码都能把它整体换掉，而 ProviderController 的模板查找、AppConfigStore 的
+     * 本地端点判定都依赖它 —— 换掉之后行为会变得无法解释。加 final 是源码兼容的
+     * （全项目没有任何一处给它赋值），只是堵住这条路。
+     *
      * 刻意只保留一项：软件自带的本地模型运行时。
      * 模型在本机以 GGUF 形式本地推理，通过回环地址的
      * OpenAI兼容端点提供服务，不需要API-Key，也不允许连接任何云端服务商。
      * 因此该列表不提供、也不再新增任何云端厂商模板。
      */
-    public static List<ModelProviderConfig> BUILTIN_PROVIDERS = List.of(
+    public static final List<ModelProviderConfig> BUILTIN_PROVIDERS = List.of(
         new ModelProviderConfig("lionbox-local", "LionBox 本地模型",
             localBaseUrl(),
             null, false,

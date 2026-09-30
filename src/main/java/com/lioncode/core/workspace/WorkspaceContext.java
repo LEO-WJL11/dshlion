@@ -57,8 +57,15 @@ public final class WorkspaceContext {
     /**
      * 解析路径：
      * - 绝对路径：严格模式下校验必须位于工作区内（越界抛出IllegalStateException）
-     * - 相对路径：拼接到工作区根目录下
+     * - 相对路径：拼接到工作区根目录下，**并且同样做越界校验**
      * - 无工作区上下文：原样返回（未绑定工作区时不限制）
+     *
+     * 【相对路径为什么也要校验】以前只有 isAbsolute() 分支做校验，相对路径直接
+     * {@code Path.of(ws).resolve(p).toString()} 就返回了 —— resolve() **不做规范化**，
+     * 于是 {@code path="..\\..\\..\\Windows\\System32\\drivers\\etc\\hosts"} 会原样拼成
+     * {@code C:\ws\..\..\..\Windows\...\hosts} 交给工具，工具再 toAbsolutePath/normalize 之后
+     * 就落在工作区外面了：沙箱形同虚设（写文件、读文件、删除全都逃得出去）。
+     * 现在统一 normalize 之后再判断是否仍在工作区内。
      */
     public static String resolve(String rawPath) {
         if (rawPath == null || rawPath.isBlank()) {
@@ -66,21 +73,61 @@ public final class WorkspaceContext {
         }
         Path p = Path.of(rawPath);
         String ws = WORKSPACE.get();
+        boolean strict = strictMode && ws != null && !ws.isBlank();
+
         if (p.isAbsolute()) {
-            if (strictMode && ws != null && !ws.isBlank()) {
+            if (strict) {
                 Path wsPath = Path.of(ws).toAbsolutePath().normalize();
                 Path abs = p.toAbsolutePath().normalize();
-                if (!abs.startsWith(wsPath)) {
-                    throw new IllegalStateException(
-                        "路径在工作区之外，已阻止访问: " + rawPath + "（当前工作区: " + ws + "）");
-                }
+                checkInside(abs, wsPath, rawPath, ws);
+                // 符号链接/junction 也要拦：normalize() 只处理 ".."，不会解析链接
+                checkRealPathInside(abs, wsPath, rawPath, ws);
             }
             return rawPath;
         }
         if (ws == null || ws.isBlank()) {
             return rawPath;
         }
-        return Path.of(ws).resolve(p).toString();
+        Path wsPath = Path.of(ws).toAbsolutePath().normalize();
+        Path resolved = wsPath.resolve(p).normalize();
+        if (strict) {
+            // 校验放在归一化之后：先判断再归一化是典型漏洞（校验用的是没归一化的串）
+            checkInside(resolved, wsPath, rawPath, ws);
+        }
+        return resolved.toString();
+    }
+
+    /** 归一化后的包含性判断 */
+    private static void checkInside(Path candidate, Path wsPath, String rawPath, String ws) {
+        if (!candidate.startsWith(wsPath)) {
+            throw new IllegalStateException(
+                "路径在工作区之外，已阻止访问: " + rawPath + "（当前工作区: " + ws + "）");
+        }
+    }
+
+    /**
+     * 解析真实路径（跟随符号链接）后再判一次。
+     * 目标不存在时（新建文件的场景）用父目录判断，父目录也不存在就跳过——
+     * 这种情况由 checkInside 的字符串判断兜底。
+     */
+    private static void checkRealPathInside(Path abs, Path wsPath, String rawPath, String ws) {
+        try {
+            Path real = abs;
+            if (!java.nio.file.Files.exists(real)) {
+                Path parent = real.getParent();
+                if (parent == null) {
+                    return;
+                }
+                real = parent;
+            }
+            Path realPath = real.toRealPath();
+            Path realWs = java.nio.file.Files.exists(wsPath) ? wsPath.toRealPath() : wsPath;
+            checkInside(realPath, realWs, rawPath, ws);
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (java.io.IOException e) {
+            // 拿不到真实路径（权限等）：退回字符串判断的结果，不额外放行也不额外拦截
+        }
     }
 
     /**

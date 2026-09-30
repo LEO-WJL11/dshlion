@@ -33,6 +33,9 @@ public class PluginRegistry {
 
     private final EventStore eventStore;
 
+    /** 事件总线（热插拔时通知订阅者；老代码只用 EventStore，这里补上总线是为了外置插件能感知） */
+    private final EventBus eventBus;
+
     /** 已注册插件映射表：插件ID -> 插件实例 */
     private final Map<String, Plugin> plugins = new ConcurrentHashMap<>();
 
@@ -42,14 +45,31 @@ public class PluginRegistry {
     /** 工具类别索引 */
     private final Map<ToolPlugin.ToolCategory, Set<String>> categoryIndex = new ConcurrentHashMap<>();
 
-    public PluginRegistry(EventStore eventStore) {
+    /** 插件分类索引（"一切皆插件"的 9 类，设置面板按它分组） */
+    private final Map<PluginKind, Set<String>> kindIndex = new ConcurrentHashMap<>();
+
+    /**
+     * 插件出错信息：插件ID -> 错误。
+     *
+     * <p>【为什么要记这个】外置 jar 是用户自己写的，initialize() 抛异常、类加载失败、
+     * 工具定义非法都很正常。这些插件**照常出现在列表里**，只是带一个 error 字段 ——
+     * 用户能在界面上直接看到"这个插件坏了、坏在哪"，
+     * 而不是"我明明放了 jar 怎么列表里没有"。
+     */
+    private final Map<String, String> pluginErrors = new ConcurrentHashMap<>();
+
+    public PluginRegistry(EventStore eventStore, EventBus eventBus) {
         this.eventStore = eventStore;
+        this.eventBus = eventBus;
         // 初始化索引
         for (Plugin.PluginType type : Plugin.PluginType.values()) {
             typeIndex.put(type, ConcurrentHashMap.newKeySet());
         }
         for (ToolPlugin.ToolCategory category : ToolPlugin.ToolCategory.values()) {
             categoryIndex.put(category, ConcurrentHashMap.newKeySet());
+        }
+        for (PluginKind kind : PluginKind.values()) {
+            kindIndex.put(kind, ConcurrentHashMap.newKeySet());
         }
     }
 
@@ -71,15 +91,37 @@ public class PluginRegistry {
                 .add(plugin.getId());
         }
 
-        plugin.initialize();
+        // 分类索引：getKind() 是派生出来的（工具按"极简模式能不能用"自动分基础/进阶），
+        // 但它是插件自己的代码，第三方插件写崩了不能把注册流程带下去。
+        PluginKind kind;
+        try {
+            kind = plugin.getKind();
+        } catch (Throwable t) {
+            kind = PluginKind.ADVANCED_TOOL;
+            pluginErrors.put(plugin.getId(), "getKind() 抛异常: " + t);
+            log.warn("插件 {} 的 getKind() 抛异常，按进阶工具归类", plugin.getId(), t);
+        }
+        kindIndex.computeIfAbsent(kind, k -> ConcurrentHashMap.newKeySet()).add(plugin.getId());
+
+        // 初始化：第三方插件的 initialize() 里可能连数据库、读文件、起线程 —— 什么都可能抛。
+        // 抛了也要留在注册表里（带 error 显示），否则用户看不到自己插件为什么没生效。
+        try {
+            plugin.initialize();
+        } catch (Throwable t) {
+            String msg = t.getClass().getSimpleName() + ": " + t.getMessage();
+            pluginErrors.put(plugin.getId(), "初始化失败 " + msg);
+            log.error("插件初始化失败（已注册但标记为异常）: {}", plugin.getId(), t);
+        }
 
         // 记录事件
         eventStore.recordEvent("system", LionEvent.EventType.PLUGIN_LOADED,
             Map.of("pluginId", plugin.getId(), "pluginName", plugin.getName(), 
-                   "pluginType", plugin.getType().name()),
+                   "pluginType", plugin.getType().name(),
+                   "pluginKind", kind.name()),
             "插件已加载: " + plugin.getName());
+        eventBus.publish(EventBus.Events.PLUGIN_LOADED, plugin.getId());
 
-        log.info("插件已注册: {} ({}) - {}", plugin.getId(), plugin.getType(), plugin.getName());
+        log.info("插件已注册: {} ({}/{}) - {}", plugin.getId(), plugin.getType(), kind, plugin.getName());
     }
 
     /**
@@ -97,16 +139,75 @@ public class PluginRegistry {
         if (removed instanceof ToolPlugin toolPlugin) {
             categoryIndex.getOrDefault(toolPlugin.getCategory(), Set.of()).remove(pluginId);
         }
+        // 分类索引按"所有分类"扫一遍删：卸载时再算一次 getKind() 没必要，而且插件可能已经半死不活
+        for (Set<String> ids : kindIndex.values()) {
+            ids.remove(pluginId);
+        }
+        pluginErrors.remove(pluginId);
 
-        removed.destroy();
+        // destroy() 同样可能抛（比如它要关的句柄早就没了），不能让一次卸载把调用方打挂
+        try {
+            removed.destroy();
+        } catch (Throwable t) {
+            log.warn("插件 destroy() 抛异常（已忽略）: {}", pluginId, t);
+        }
 
         // 记录事件
         eventStore.recordEvent("system", LionEvent.EventType.PLUGIN_UNLOADED,
             Map.of("pluginId", pluginId, "pluginName", removed.getName()),
             "插件已卸载: " + removed.getName());
+        eventBus.publish(EventBus.Events.PLUGIN_UNLOADED, pluginId);
 
         log.info("插件已注销: {}", pluginId);
         return true;
+    }
+
+    /**
+     * 按分类取插件
+     */
+    public List<Plugin> getByKind(PluginKind kind) {
+        return kindIndex.getOrDefault(kind, Set.of()).stream()
+                .map(plugins::get)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    /**
+     * 每个分类各有几个插件（设置面板的分组标题要显示数量）。
+     *
+     * <p>九类全部返回（哪怕是 0）—— 前端据此渲染"这一类是空的"，
+     * 比"这一类不出现"更容易让人发现"我期望的东西没装上"。
+     */
+    public Map<PluginKind, Integer> kindCounts() {
+        Map<PluginKind, Integer> out = new java.util.LinkedHashMap<>();
+        for (PluginKind kind : PluginKind.values()) {
+            out.put(kind, (int) kindIndex.getOrDefault(kind, Set.of()).stream()
+                .filter(id -> plugins.containsKey(id)).count());
+        }
+        return out;
+    }
+
+    /** 插件当前的错误信息（没有就是 null） */
+    public String getError(String pluginId) {
+        return pluginErrors.get(pluginId);
+    }
+
+    /**
+     * 工具名 -> 插件ID 的映射。
+     *
+     * <p>AgentLoop 拿到的是一串**工具名**（{@code read_file}），
+     * 而"用户在设置里关掉"针对的是**插件ID**（{@code tool.file.read}）。
+     * 这层映射就是两者的桥：关掉哪个插件，就把它贡献的工具名从下发的清单里摘掉。</p>
+     */
+    public Map<String, String> toolNameToPluginId() {
+        Map<String, String> out = new HashMap<>();
+        for (ToolPlugin tool : getToolPlugins()) {
+            String name = tool.getName();
+            if (name != null && !name.isBlank()) {
+                out.put(name, tool.getId());
+            }
+        }
+        return out;
     }
 
     /**

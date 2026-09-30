@@ -548,14 +548,32 @@ public class AppConfigStore {
 
     /**
      * 持久化到磁盘
+     *
+     * <p>【为什么不用 Files.writeString 直接写目标文件】那是"先截断再写"：
+     * 写到一半断电/被杀/磁盘满，app-config.json 就变成半截 JSON。
+     * 下次启动 {@code mapper.readValue} 解析失败 → 被 catch 成"加载失败"→
+     * 用户填的端点、密钥、模型、llama 参数**全部静默丢失**（只剩一行 error 日志）。
+     * 改为先写同目录的 .tmp 再原子改名：要么是旧内容，要么是新内容。
      */
     private void saveToDisk() {
         try {
+            if (configFile == null) {
+                return;
+            }
             if (configFile.getParent() != null) {
                 Files.createDirectories(configFile.getParent());
             }
             String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(config);
-            Files.writeString(configFile, json);
+            Path tmp = configFile.resolveSibling(configFile.getFileName() + ".tmp");
+            Files.writeString(tmp, json);
+            try {
+                Files.move(tmp, configFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.FileSystemException e) {
+                // 某些文件系统/杀软占用时不支持原子移动（AtomicMoveNotSupportedException
+                // 本身就是 FileSystemException 的子类），退回普通替换
+                Files.move(tmp, configFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
             log.debug("应用配置已保存: {}", configFile);
         } catch (IOException e) {
             log.error("保存应用配置失败: {}", configFile, e);

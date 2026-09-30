@@ -251,24 +251,37 @@ public class NativeDialogController {
             pb.environment().put("LIONCODE_INITIAL_DIR", initialPath == null ? "" : initialPath);
             pb.environment().put("LIONCODE_RESULT_FILE", resultFile.toString());
             pb.redirectErrorStream(true);
+            // 【顺序很关键】必须先把 stdout 重定向到文件，再去 waitFor(超时)。
+            // 原实现是"先在当前线程 readLine() 读完 stdout，再 waitFor(300, SECONDS)"：
+            // readLine() 会一直阻塞到子进程关闭 stdout，也就是**对话框关掉为止** ——
+            // 用户把选择窗口晾在那儿不点，这个 HTTP 线程就永远卡住，waitFor 的超时形同虚设；
+            // 而且 finally 里的 DIALOG_OPEN 复位也永远不会执行，之后所有请求都被
+            // "文件夹选择窗口已打开"拒绝，只能重启应用。
+            Path stdoutFile = tempDir.resolve("stdout.txt");
+            pb.redirectOutput(stdoutFile.toFile());
 
             Process process = pb.start();
 
-            // 读取stdout（仅用于诊断，结果以结果文件为准）
-            StringBuilder stdout = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    stdout.append(line).append('\n');
-                }
-            }
-
             boolean finished = process.waitFor(300, TimeUnit.SECONDS);
+            String stdoutText = "";
+            try {
+                if (Files.exists(stdoutFile)) {
+                    stdoutText = Files.readString(stdoutFile, StandardCharsets.UTF_8);
+                }
+            } catch (IOException e) {
+                log.debug("读取选择器 stdout 失败（忽略）: {}", e.getMessage());
+            }
+            StringBuilder stdout = new StringBuilder(stdoutText);
+
             if (!finished) {
                 process.destroyForcibly();
+                try {
+                    process.waitFor(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
                 log.warn("文件夹选择对话框超时，stdout: {}", stdout);
-                return ApiResponse.error("对话框超时");
+                return ApiResponse.error("对话框等待超时（5 分钟），已关闭；请重新打开并完成选择");
             }
 
             int exitCode = process.exitValue();

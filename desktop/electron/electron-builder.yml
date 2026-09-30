@@ -1,0 +1,71 @@
+# electron-builder 打包配置（版本 26.15.3）
+# 官方文档：https://www.electron.build/
+#
+# 用法：
+#   npm run pack     # 只产出免安装目录（dist/win-unpacked 之类），最快，用于本地验证
+#   npm run dist     # 产出安装包（Windows: NSIS + portable；macOS: dmg/zip；Linux: AppImage/deb）
+
+appId: com.lioncode.lionbox
+productName: LionBox
+copyright: Copyright © 2026 LionCode
+
+directories:
+  output: dist
+  buildResources: build
+
+# 打进 asar 的文件（只包含运行期真正需要的）
+files:
+  - main.js
+  - preload.js
+  - status.html
+  - package.json
+
+# ---------------------------------------------------------------------------
+# 随包附带后端 fat jar（可选）
+# 打开下面的 extraResources，并确保源文件存在 —— 源文件不存在时 electron-builder
+# 会直接报错，所以默认注释掉，等 jar 就位再开。
+#
+# 打包后主进程会在 process.resourcesPath/backend/lion-code-agent-harness.jar 找到它，
+# 并用 `java -jar` 拉起（见 main.js 的 resolveBackendJar / startBackendIfConfigured）。
+# 另一种更省事的方式：不随包分发，改在运行时设 LIONBOX_JAR=<绝对路径>。
+# ---------------------------------------------------------------------------
+# extraResources:
+#   - from: ../../target/lion-code-agent-harness-1.0.0-SNAPSHOT.jar
+#     to: backend/lion-code-agent-harness.jar
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  # 未签名时 Windows SmartScreen 会拦截，正式发布请配置证书：
+  # certificateFile / certificatePassword（或用 CSC_LINK / CSC_KEY_PASSWORD 环境变量）
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: LionBox
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+  # macOS 分发必须签名 + 公证（否则 Gatekeeper 拦截）：
+  # hardenedRuntime: true
+  # entitlements: build/entitlements.mac.plist
+  # notarize: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+
+# 自动更新：electron-builder 生成的 latest.yml / *.blockmap 需要放到一个 HTTP 更新源，
+# 再由主进程的 autoUpdater 拉取。详见 https://www.electron.build/ 与
+# https://www.electronjs.org/docs/latest/tutorial/tutorial-publishing-updating
+publish: null

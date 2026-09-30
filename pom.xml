@@ -196,7 +196,15 @@
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
-                <filtering>true</filtering>
+                <!-- 【不要开 filtering！】Maven 的占位符过滤会在**打包时**把
+                     application.yml 里的 ${user.home} 替换成"构建这台机器"的家目录
+                     （实测产物里写死成 C:\Users\Leo/lion-code-workspace）。后果：
+                       · 装到别人机器上，普通用户没权限在 C:\Users 下建目录 →
+                         事件/会话/历史持久化静默失败，用户只会觉得"它记不住东西"；
+                       · 所有用 -Duser.home 做隔离的自测套件全部失效（还是写到真实目录）。
+                     这些占位符本来就该由 Spring 在**运行时**解析（user.home 是 JVM 系统属性），
+                     关掉过滤即可。logback-spring.xml 里的 ${LOG_PATTERN} 同理，由 logback 运行时解析。 -->
+                <filtering>false</filtering>
             </resource>
             <!-- 打包前端静态资源 -->
             <resource>

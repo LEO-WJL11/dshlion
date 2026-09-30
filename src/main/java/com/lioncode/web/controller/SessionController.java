@@ -30,13 +30,17 @@ public class SessionController {
     private final WorkspaceManager workspaceManager;
     private final SessionPersistence sessionPersistence;
     private final ConversationHistory conversationHistory;
+    /** 会话被销毁时顺手清掉它"钉住"的技能，避免长时间运行攒一堆死会话的绑定关系 */
+    private final com.lioncode.core.plugin.skill.SkillRepository skillRepository;
 
     public SessionController(SessionManager sessionManager, WorkspaceManager workspaceManager,
-                             SessionPersistence sessionPersistence, ConversationHistory conversationHistory) {
+                             SessionPersistence sessionPersistence, ConversationHistory conversationHistory,
+                             com.lioncode.core.plugin.skill.SkillRepository skillRepository) {
         this.sessionManager = sessionManager;
         this.workspaceManager = workspaceManager;
         this.sessionPersistence = sessionPersistence;
         this.conversationHistory = conversationHistory;
+        this.skillRepository = skillRepository;
     }
 
     /**
@@ -135,6 +139,7 @@ public class SessionController {
         sessionPersistence.deleteSession(sessionId);
         conversationHistory.clearHistory(sessionId);
         conversationHistory.deleteFromDisk(sessionId);
+        skillRepository.clearSession(sessionId);
         return ApiResponse.ok("会话已销毁", null);
     }
 
@@ -157,6 +162,7 @@ public class SessionController {
                 sessionPersistence.deleteSession(sid);
                 conversationHistory.clearHistory(sid);
                 conversationHistory.deleteFromDisk(sid);
+                skillRepository.clearSession(sid);
                 deleted++;
             } catch (Exception e) {
                 failed++;

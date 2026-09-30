@@ -108,7 +108,12 @@ public class PrewarmService {
             return;
         }
         log.info("配置要求开机预热，开始…");
-        new Thread(() -> warmUp("开机预热"), "lionbox-prewarm").start();
+        // 【守护线程】预热会阻塞到模型加载完（ensureRunning 最长 300 秒）+ 一次模型请求（读超时 900 秒）。
+        // 原来这条线程不是 daemon：用户在预热途中关窗口，JVM 会因为"还有非守护线程活着"而迟迟不退出，
+        // 看起来就是"点了关闭但进程还在"。
+        Thread t = new Thread(() -> warmUp("开机预热"), "lionbox-prewarm");
+        t.setDaemon(true);
+        t.start();
     }
 
     /**
