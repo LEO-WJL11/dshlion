@@ -33,7 +33,7 @@ public class UuidTool extends AbstractToolPlugin {
 
     @Override
     public ToolResult execute(Map<String, Object> arguments) {
-        int count = arguments.containsKey("count") ? ((Number) arguments.get("count")).intValue() : 1;
+        int count = getIntArg(arguments, "count", 1);
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < count; i++) {
             sb.append(UUID.randomUUID().toString()).append("\n");

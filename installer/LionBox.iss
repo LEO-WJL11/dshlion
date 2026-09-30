@@ -68,7 +68,14 @@
 ; 1.3.1：**删掉会中断任务的东西**（同一工具同参数 5 次就终止任务、连续失败就跳过不执行、
 ;         一轮最多 3 个工具调用多余的丢掉、轮次过多自动停止）；
 ;         工具调用显示**统一成一行式**（🔧 调用工具：X … / ✅ X 完成 / ❌ X 失败），【系统提示】不再显示在对话里
-#define AppVersion     "1.3.1"
+; 1.4.0：① **execute_command 改成"一个持续运行的终端"**（同一工作区共用一个 PowerShell 会话，
+;         cd / 变量 / 函数都留到下一次调用，不再每条命令新开一个进程）；
+;         ② **标准模式 = 全部 55 个工具，极简模式 = 只有文件类 + shell 类工具**（21 个，
+;         以前 web_search 写死了"永远可用"，极简模式里也能调，现在按模式真过滤）；
+;         ③ 修报错工具：参数是字符串时的强转崩溃（head_tail_file 的 lines 等）、line_count 读 GBK 文件、
+;         modify_file operation=create、git_branch 在空仓库里建分支、stop_background 不给 pid；
+;         ④ 修界面**工具行重复刷屏**（web_search 出现 9 次、ask_user 20 次）
+#define AppVersion     "1.4.0"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

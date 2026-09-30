@@ -42,8 +42,7 @@ public class UrlFetchTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String url = getRequiredStringArg(arguments, "url");
-            int maxLength = arguments.containsKey("maxLength") ? 
-                ((Number) arguments.get("maxLength")).intValue() : 10000;
+            int maxLength = getIntArg(arguments, "maxLength", 10000);
             
             Request request = new Request.Builder().url(url).get().build();
             try (Response response = client.newCall(request).execute()) {

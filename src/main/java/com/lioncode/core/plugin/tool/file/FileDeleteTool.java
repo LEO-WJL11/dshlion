@@ -67,8 +67,7 @@ public class FileDeleteTool extends AbstractToolPlugin {
             if (Files.isDirectory(target)) {
                 // 【实测】模型想清掉整棵目录树（比如它自己建的 .git_test）时会撞上
                 // "目录不为空，无法删除"。给它一个 recursive 开关，显式要求才递归删。
-                boolean recursive = Boolean.TRUE.equals(arguments.get("recursive"))
-                    || "true".equalsIgnoreCase(String.valueOf(arguments.get("recursive")));
+                boolean recursive = getBoolArg(arguments, "recursive", false);
                 if (recursive) {
                     try (var walk = Files.walk(target)) {
                         walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {

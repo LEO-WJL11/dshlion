@@ -36,7 +36,7 @@ public class GitInitTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            boolean bare = Boolean.TRUE.equals(arguments.get("bare"));
+            boolean bare = getBoolArg(arguments, "bare", false);
             // 【实测】模型会直接 git_init 到一个还不存在的目录（.git_test），
             // 结果 ProcessBuilder 报 error=267 目录名称无效，它还以为是"没装 git"。
             // git init 到新目录本来就是正常用法，这里直接建出来。

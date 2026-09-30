@@ -1002,11 +1002,29 @@ public class AgentLoop {
         if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
             prompt.append("执行环境是 **Windows**，execute_command 走 PowerShell：ls/cat/rm/cp/mv/pwd 都能用，");
             prompt.append("但多条命令之间用 `;` 分隔，不要用 `&&`（Windows PowerShell 不认）。\n");
+            prompt.append("execute_command 是**一个持续运行的终端**（同一工作区共用一个会话）：");
+            prompt.append("cd 切过的目录、设过的变量和函数都会留到下一次调用，不用每条命令都重新 cd。\n");
         }
         prompt.append("\n");
 
         // 根据模式添加专属提示词（每个模式独立撰写，行为规则各不相同）
         prompt.append(modeInstructions(mode));
+
+        // 极简模式：把"真的可用的工具名"钉在提示词里。
+        //
+        // 【为什么非要写死一份】上面那段只说"仅开放文件工具和 Shell 工具"，而模型对
+        // "文件工具"的理解是它自己训练里的那套名字（试过 list_files、file_read…）。
+        // 实测极简模式跑一轮，它照样去调 web_search / timestamp —— 全是模式外的工具，
+        // 用户看到的就是一屏 ❌。所以这里把筛选后的真实工具名直接列出来，不给它猜的空间。
+        if (mode == AgentMode.MINIMAL) {
+            List<String> minimalNames = pluginRegistry.getToolsByMode(AgentMode.MINIMAL).stream()
+                .map(ToolPlugin::getName)
+                .filter(n -> n != null && !n.isBlank())
+                .sorted()
+                .toList();
+            prompt.append("本模式实际可用的工具**只有下面这些**（其余工具在本模式不存在，不要调用）：\n");
+            prompt.append(String.join("、", minimalNames)).append("\n\n");
+        }
 
         // 注入适用技能的领域能力提示词（按用户消息匹配）
         prompt.append(buildSkillPrompt(userMessage));
@@ -1500,8 +1518,11 @@ public class AgentLoop {
                 本模式仅开放**文件工具和 Shell 工具**，追求最少步骤、最高效率。
 
                 行为准则：
-                1. 只使用 read_file / write_file / modify_file / list_files / execute_command 等
-                   文件与 Shell 工具，不得调用其他任何工具。
+                1. 只使用文件工具（read_file / write_file / modify_file / create_file /
+                   append_file / delete_file / move_file / copy_file / list_directory /
+                   directory_tree / glob_files / search_in_files / line_count / word_count /
+                   head_tail_file / file_info / change_permissions）和 Shell 工具
+                   （execute_command / run_background / stop_background），不得调用其他任何工具。
                 2. 回复务必简短：不解释背景、不寒暄、不说废话，直接执行。
                 3. 能用一条命令完成的事，不要拆成多条。
                 4. 每轮只调用一个工具；结果返回后立即决定下一步。

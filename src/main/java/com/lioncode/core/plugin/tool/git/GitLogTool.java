@@ -45,8 +45,7 @@ public class GitLogTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            int count = arguments.containsKey("count") ? 
-                ((Number) arguments.get("count")).intValue() : 20;
+            int count = getIntArg(arguments, "count", 20);
 
             ProcessBuilder pb = new ProcessBuilder(
                 "git", "log", "--oneline", "-" + count);

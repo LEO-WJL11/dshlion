@@ -48,7 +48,7 @@ public class GitDiffTool extends AbstractToolPlugin {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             String file = getStringArg(arguments, "file", null);
-            boolean cached = Boolean.TRUE.equals(arguments.get("cached"));
+            boolean cached = getBoolArg(arguments, "cached", false);
 
             var cmd = new java.util.ArrayList<String>();
             cmd.add("git");

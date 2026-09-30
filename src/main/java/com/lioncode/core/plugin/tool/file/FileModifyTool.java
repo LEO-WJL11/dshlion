@@ -36,7 +36,7 @@ public class FileModifyTool extends AbstractToolPlugin {
             "type", "object",
             "properties", Map.of(
                 "path", Map.of("type", "string", "description", "文件路径"),
-                "operation", Map.of("type", "string", "description", "操作类型: replace / insert / delete / append（追加到末尾）"),
+                "operation", Map.of("type", "string", "description", "操作类型: replace / insert / delete / append（追加到末尾）/ create（新建或整体覆盖）"),
                 "startLine", Map.of("type", "integer", "description", "起始行号"),
                 "endLine", Map.of("type", "integer", "description", "结束行号（replace操作）"),
                 "content", Map.of("type", "string", "description", "新内容"),
@@ -66,16 +66,37 @@ public class FileModifyTool extends AbstractToolPlugin {
             String operation = getRequiredStringArg(arguments, "operation");
             
             Path filePath = Path.of(path);
+            String operationLow = operation.trim().toLowerCase();
             if (!Files.exists(filePath)) {
-                return error("文件不存在: " + path);
+                // 【实测】模型会把 modify_file 当"建文件"用（operation=create），
+                // 以前只回一句"文件不存在"，白跑一轮。既然它想要的语义就是"把文件弄成我要的样"，
+                // 这里直接按 create_file 建出来，并把话说明白。
+                if (operationLow.equals("create") || operationLow.equals("write")
+                        || operationLow.equals("new") || operationLow.equals("touch")) {
+                    Path parent = filePath.getParent();
+                    if (parent != null) {
+                        Files.createDirectories(parent);
+                    }
+                    Files.writeString(filePath, getStringArg(arguments, "content", ""),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                    return success("文件不存在，已按 create 语义新建: " + path
+                        + "（新建文件也可以直接用 create_file；改已有文件用 replace/append）");
+                }
+                return error("文件不存在: " + path + "（想新建：operation=create 并带上 content，"
+                    + "或直接用 create_file / write_file）");
             }
 
             List<String> lines = readTextLines(filePath);
-            int startLine = arguments.containsKey("startLine") ? 
-                ((Number) arguments.get("startLine")).intValue() : 0;
+            int startLine = getIntArg(arguments, "startLine", 0);
             String content = getStringArg(arguments, "content", "");
 
-            switch (operation) {
+            switch (operationLow) {
+                case "create", "write", "new", "touch" -> {
+                    // 文件已经在了：create 没法"再建一次"，直接把它要的内容当作整体覆盖，
+                    // 免得模型在 create/replace 之间来回试。
+                    Files.writeString(filePath, content, charsetOf(filePath));
+                    return success("文件已存在，已按 create 覆盖写入: " + path);
+                }
                 case "replace" -> {
                     // ① 给了 oldText 就按文本替换（最省事，也不用数行号 ——
                     //    实测模型经常只给 content 不给行号，以前直接报"行号超出范围: 0"）。
@@ -87,7 +108,7 @@ public class FileModifyTool extends AbstractToolPlugin {
                                 + "先用 read_file 看一眼）：" + oldText.substring(0,
                                     Math.min(60, oldText.length())));
                         }
-                        boolean all = Boolean.TRUE.equals(arguments.get("all"));
+                        boolean all = getBoolArg(arguments, "all", false);
                         String replaced = all
                             ? full.replace(oldText, content)
                             : full.replaceFirst(java.util.regex.Pattern.quote(oldText),
@@ -101,8 +122,7 @@ public class FileModifyTool extends AbstractToolPlugin {
                         return error("replace 需要行号或原文：给 startLine（可加 endLine），"
                             + "或者给 oldText + content 让我按原文替换");
                     }
-                    int endLine = arguments.containsKey("endLine") ? 
-                        ((Number) arguments.get("endLine")).intValue() : startLine;
+                    int endLine = getIntArg(arguments, "endLine", startLine);
                     if (startLine > lines.size()) {
                         return error("起始行号超出范围: " + startLine + "（这个文件只有 "
                             + lines.size() + " 行）");
@@ -131,8 +151,7 @@ public class FileModifyTool extends AbstractToolPlugin {
                     }
                 }
                 case "delete" -> {
-                    int endLine = arguments.containsKey("endLine") ? 
-                        ((Number) arguments.get("endLine")).intValue() : startLine;
+                    int endLine = getIntArg(arguments, "endLine", startLine);
                     if (startLine < 1 || startLine > lines.size()) {
                         return error("行号超出范围: " + startLine);
                     }

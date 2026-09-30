@@ -45,7 +45,7 @@ public class GitCommitTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             String message = getRequiredStringArg(arguments, "message");
             boolean addAll = !arguments.containsKey("addAll") || 
-                Boolean.TRUE.equals(arguments.get("addAll"));
+                getBoolArg(arguments, "addAll", false);
 
             // 先执行git add
             if (addAll) {

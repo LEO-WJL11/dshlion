@@ -37,8 +37,7 @@ public class FileTreeTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            int maxDepth = arguments.containsKey("maxDepth") ? 
-                ((Number) arguments.get("maxDepth")).intValue() : 3;
+            int maxDepth = getIntArg(arguments, "maxDepth", 3);
             
             StringBuilder sb = new StringBuilder();
             buildTree(Path.of(path), "", maxDepth, sb);

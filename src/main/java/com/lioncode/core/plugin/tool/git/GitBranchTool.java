@@ -36,8 +36,45 @@ public class GitBranchTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            String action = getRequiredStringArg(arguments, "action");
+            String action = getRequiredStringArg(arguments, "action").trim().toLowerCase();
             String branch = getStringArg(arguments, "branch", null);
+
+            String dirError = checkGitDirectory(path);
+            if (dirError != null) {
+                return error(dirError);
+            }
+            if (branch == null || branch.isBlank()) {
+                branch = getStringArg(arguments, "name", null);
+            }
+
+            // 【实测】空仓库（还没有任何提交）里 `git branch foo` 只回
+            // "fatal: not a valid object name: 'master'" —— master 还不存在，
+            // 新分支没有可指向的提交。这不是 git 坏了，但话看不懂，用户以为是工具坏。
+            // 空仓库下唯一有意义的做法是 `checkout -b`（建好并切过去），这里代它做掉。
+            if (action.equals("create") || action.equals("checkout")) {
+                if (branch == null || branch.isBlank()) {
+                    return error("缺少分支名：action=" + action
+                        + " 要带 branch 参数（例如 branch=dev）");
+                }
+                if (isEmptyRepository(path)) {
+                    ProcessBuilder cb = new ProcessBuilder(gitExecutable(), "checkout", "-b", branch);
+                    cb.directory(new File(path));
+                    cb.redirectErrorStream(true);
+                    gitEnv(cb);
+                    Process cp = cb.start();
+                    if (!cp.waitFor(30, TimeUnit.SECONDS)) {
+                        cp.destroyForcibly();
+                        return error("git 命令超时（30 秒没返回）");
+                    }
+                    String out = new String(cp.getInputStream().readAllBytes());
+                    if (cp.exitValue() == 0) {
+                        return success("仓库还没有任何提交，已直接创建并切换到分支 " + branch
+                            + "（空仓库里 git branch 建不出分支，所以用 checkout -b；"
+                            + "git_commit 一次之后再 git_branch list 就能看到它）\n" + out);
+                    }
+                    return error("创建分支失败（退出码 " + cp.exitValue() + "）:\n" + out);
+                }
+            }
 
             ProcessBuilder pb;
             switch (action) {
@@ -45,7 +82,9 @@ public class GitBranchTool extends AbstractToolPlugin {
                 case "create" -> pb = new ProcessBuilder(gitExecutable(), "branch", branch);
                 case "checkout" -> pb = new ProcessBuilder(gitExecutable(), "checkout", branch);
                 case "delete" -> pb = new ProcessBuilder(gitExecutable(), "branch", "-d", branch);
-                default -> { return error("未知操作: " + action); }
+                default -> {
+                    return error("未知操作: " + action + "（支持 list / create / checkout / delete）");
+                }
             }
 
             pb.directory(new File(path));

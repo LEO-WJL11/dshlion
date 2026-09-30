@@ -47,9 +47,8 @@ public class FileListTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            boolean recursive = Boolean.TRUE.equals(arguments.get("recursive"));
-            int maxDepth = arguments.containsKey("maxDepth") ? 
-                ((Number) arguments.get("maxDepth")).intValue() : 3;
+            boolean recursive = getBoolArg(arguments, "recursive", false);
+            int maxDepth = getIntArg(arguments, "maxDepth", 3);
 
             Path dirPath = Path.of(path);
             if (!Files.exists(dirPath)) {

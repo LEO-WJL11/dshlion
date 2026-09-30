@@ -55,9 +55,8 @@ public class FileSearchTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             String pattern = getRequiredStringArg(arguments, "pattern");
             String filePattern = getStringArg(arguments, "filePattern", "*");
-            boolean useRegex = Boolean.TRUE.equals(arguments.get("useRegex"));
-            int maxResults = arguments.containsKey("maxResults") ? 
-                ((Number) arguments.get("maxResults")).intValue() : 50;
+            boolean useRegex = getBoolArg(arguments, "useRegex", false);
+            int maxResults = getIntArg(arguments, "maxResults", 50);
 
             Path searchDir = Path.of(path);
             if (!Files.exists(searchDir)) {

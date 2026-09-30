@@ -41,9 +41,9 @@ public class FileChmodTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             Path filePath = Path.of(path);
             
-            boolean readable = Boolean.TRUE.equals(arguments.get("readable"));
-            boolean writable = Boolean.TRUE.equals(arguments.get("writable"));
-            boolean executable = Boolean.TRUE.equals(arguments.get("executable"));
+            boolean readable = getBoolArg(arguments, "readable", false);
+            boolean writable = getBoolArg(arguments, "writable", false);
+            boolean executable = getBoolArg(arguments, "executable", false);
             
             // 使用Files.setPosixFilePermissions在支持的系统上
             Set<PosixFilePermission> perms = new HashSet<>();

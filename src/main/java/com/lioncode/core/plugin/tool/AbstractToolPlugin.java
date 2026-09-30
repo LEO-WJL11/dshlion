@@ -52,11 +52,15 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
 
     @Override
     public boolean isAvailableInMode(AgentMode mode) {
-        // 极简模式下只开放文件和Shell工具
+        // 极简模式：只开放"文件类 + shell 类"工具。
+        // 文件类 = 文件操作 / 文件修改 / 文件检索（glob_files、search_in_files 也是文件工具），
+        // shell 类 = execute_command 与后台进程那一组。其余（网络、Git、编解码…）一律不给，
+        // 连工具清单里都不出现 —— 这样模型不会去试，也不会刷出一屏 ❌。
         if (mode == AgentMode.MINIMAL) {
             ToolCategory cat = getCategory();
-            return cat == ToolCategory.FILE_OPERATION 
+            return cat == ToolCategory.FILE_OPERATION
                 || cat == ToolCategory.FILE_MODIFY
+                || cat == ToolCategory.FILE_SEARCH
                 || cat == ToolCategory.SHELL;
         }
         // 创造模式（已不再开放给用户）下所有工具可用 ——
@@ -96,6 +100,61 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
         return val instanceof String s ? s : defaultValue;
     }
 
+    /**
+     * 安全获取整数参数。
+     *
+     * <p>【实测教训】文本通道（本地盒子默认）下，模型给的所有参数都是**字符串**：
+     * 它写 {@code <parameter=lines>5</parameter>}，工具里却是
+     * {@code ((Number) arguments.get("lines")).intValue()} —— 直接
+     * {@code ClassCastException: class java.lang.String cannot be cast to class java.lang.Number}，
+     * 用户看到的就是"head_tail_file ❌/line 读取失败"。
+     * 一个数字参数就废掉一个工具，所以这里统一收口：字符串、数字、布尔、null 全认，
+     * 认不出来就用默认值（不抛异常）。
+     */
+    protected int getIntArg(Map<String, Object> args, String key, int defaultValue) {
+        Object val = args.get(key);
+        if (val == null) {
+            return defaultValue;
+        }
+        if (val instanceof Number n) {
+            return n.intValue();
+        }
+        String s = String.valueOf(val).trim();
+        if (s.isEmpty() || "null".equalsIgnoreCase(s)) {
+            return defaultValue;
+        }
+        try {
+            // 兼容 "5" / "5.0" / "5 行" / "3个" 这类模型写法
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("-?\\d+(\\.\\d+)?").matcher(s);
+            if (m.find()) {
+                return (int) Double.parseDouble(m.group());
+            }
+        } catch (Exception ignore) {
+            // 走默认值
+        }
+        return defaultValue;
+    }
+
+    /**
+     * 安全获取布尔参数：同样兼容字符串 "true"/"false"/"1"/"0"/"是"/"否"。
+     */
+    protected boolean getBoolArg(Map<String, Object> args, String key, boolean defaultValue) {
+        Object val = args.get(key);
+        if (val == null) {
+            return defaultValue;
+        }
+        if (val instanceof Boolean b) {
+            return b;
+        }
+        String s = String.valueOf(val).trim().toLowerCase();
+        return switch (s) {
+            case "true", "1", "yes", "y", "是", "真" -> true;
+            case "false", "0", "no", "n", "否", "假" -> false;
+            default -> defaultValue;
+        };
+    }
+
     /** 是不是 Windows。 */
     protected static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase().contains("win");
@@ -132,6 +191,31 @@ public abstract class AbstractToolPlugin implements ToolPlugin {
             }
         }
         return cachedGit = "git";   // 交给 PATH
+    }
+
+    /**
+     * 这个 git 仓库是不是"空仓库"（初始化过、但还没有任何提交）。
+     *
+     * <p>判据：`git rev-parse --verify HEAD` 失败 —— 没有提交时 HEAD 指向不存在的 master，
+     * 所以 `git branch <名字>` 会报 {@code fatal: not a valid object name: 'master'}。
+     * 认识这个状态，工具就能改成做真正有用的事（checkout -b），而不是把 git 的原话甩给模型。
+     */
+    protected static boolean isEmptyRepository(String dir) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(gitExecutable(), "rev-parse", "--verify", "HEAD");
+            pb.directory(new java.io.File(dir));
+            pb.redirectErrorStream(true);
+            gitEnv(pb);
+            Process p = pb.start();
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return false;
+            }
+            p.getInputStream().readAllBytes();   // 排空，避免子进程阻塞
+            return p.exitValue() != 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

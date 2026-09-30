@@ -70,8 +70,9 @@ public class WebSearchTool extends AbstractToolPlugin {
     @Override
     public PermissionLevel getRequiredPermission() { return PermissionLevel.READ_ONLY; }
 
-    @Override
-    public boolean isAvailableInMode(AgentMode mode) { return true; }
+    // 【注意】这里以前写死 `isAvailableInMode = true`（搜索工具的"永远可用"老特例），
+    // 结果极简模式（只该有文件类 + shell 类工具）里还能调 web_search，用户一眼就看出模式没生效。
+    // 现在交给基类按"模式 + 类别"统一判断：极简模式下它根本不在工具清单里。
 
     @Override
     protected Map<String, Object> getParametersSchema() {

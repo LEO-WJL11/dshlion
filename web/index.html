@@ -269,6 +269,10 @@ var App = {
     currentBotDiv: null,
     toolLines: [],
     lastEventTs: 0,
+    // 已经画过的事件 id：后端按毫秒过滤（毫秒边界会重复返回几条），这里按 id 兜底去重，
+    // 否则同一条 TOOL_CALL_START 会在每次轮询里再画一遍（实测 web_search 画了 9 次）。
+    seenEvents: {},
+    seenEventOrder: [],
     pollTimer: null,
     appConfig: null,
     savedModel: '',
@@ -938,6 +942,8 @@ var App = {
         this.paused = false;
         this.toolLines = [];
         this.lastEventTs = Date.now();
+        this.seenEvents = {};
+        this.seenEventOrder = [];
 
         // 显示控制条，禁用发送按钮
         var controls = document.getElementById('agentControls');
@@ -1000,6 +1006,15 @@ var App = {
             res.data.forEach(function(ev) {
                 var t = ev.timestamp ? new Date(ev.timestamp).getTime() : 0;
                 if (t > self.lastEventTs) self.lastEventTs = t;
+                // 去重：同一条事件只画一次
+                var eid = ev.eventId || (ev.type + '@' + ev.timestamp + '#' + ((ev.data && ev.data.toolName) || ''));
+                if (self.seenEvents[eid]) return;
+                self.seenEvents[eid] = 1;
+                self.seenEventOrder.push(eid);
+                if (self.seenEventOrder.length > 800) {
+                    var drop = self.seenEventOrder.shift();
+                    delete self.seenEvents[drop];
+                }
                 var name = (ev.data && ev.data.toolName) || '';
                 if (ev.type === 'TOOL_CALL_START' && name) {
                     self.toolLines.push('<div style="font-size:12px;color:#74b9ff;margin-top:4px">🔧 调用工具：<b>' + name + '</b> …</div>');

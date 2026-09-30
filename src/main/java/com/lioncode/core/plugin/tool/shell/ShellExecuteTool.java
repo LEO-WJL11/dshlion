@@ -6,19 +6,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.io.*;
+import java.io.File;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
- * Shell命令执行工具
- * 
- * 在工作区目录中执行Shell命令，捕获stdout和stderr。
+ * Shell命令执行工具（常驻终端）。
+ *
+ * <p>它不是"每条命令起一个进程"，而是把这个工作区的一个**长期活着的 PowerShell**
+ * 当终端用：命令流里 {@code cd}、变量、函数都会留到下一次调用
+ * （实现见 {@link PersistentShell}）。所以模型可以像人在终端里一样一条条往下做，
+ * 而不是每条命令都在一个全新的、忘了刚才做过什么的进程里跑。
  */
 @Component
 public class ShellExecuteTool extends AbstractToolPlugin {
 
     private static final Logger log = LoggerFactory.getLogger(ShellExecuteTool.class);
+
+    private final PersistentShell terminal;
+
+    public ShellExecuteTool(PersistentShell terminal) {
+        this.terminal = terminal;
+    }
 
     @Override
     public String getId() { return "tool.shell.execute"; }
@@ -27,7 +35,10 @@ public class ShellExecuteTool extends AbstractToolPlugin {
     public String getName() { return "execute_command"; }
 
     @Override
-    public String getDescription() { return "在工作区中执行Shell命令"; }
+    public String getDescription() {
+        return "在常驻终端里执行命令（同一工作区共用一个持续运行的 PowerShell 会话，"
+            + "cd、变量、函数会保留到下一次调用）";
+    }
 
     @Override
     public ToolCategory getCategory() { return ToolCategory.SHELL; }
@@ -38,7 +49,8 @@ public class ShellExecuteTool extends AbstractToolPlugin {
             "type", "object",
             "properties", Map.of(
                 "command", Map.of("type", "string", "description", "要执行的命令"),
-                "workdir", Map.of("type", "string", "description", "工作目录（可选）"),
+                "workdir", Map.of("type", "string",
+                    "description", "工作目录（可选；给了就先切过去，之后的命令留在这个目录）"),
                 "timeout", Map.of("type", "integer", "description", "超时秒数", "default", 60)
             ),
             "required", new String[]{"command"}
@@ -89,7 +101,7 @@ public class ShellExecuteTool extends AbstractToolPlugin {
      * <p>判据：用了 cmd 的内置命令 + `/x` 风格开关（`rmdir /s /q`、`del /f`、`xcopy /e`…），
      * 或者 cmd 独占的命令名（`dir`、`type`、`findstr`、`tasklist`、`taskkill`）。
      */
-    private static boolean looksLikeCmd(String command) {
+    static boolean looksLikeCmd(String command) {
         if (command == null || command.isBlank()) {
             return false;
         }
@@ -101,128 +113,67 @@ public class ShellExecuteTool extends AbstractToolPlugin {
         return c.matches("^(dir|type|findstr|tasklist|taskkill|where|ver|set)\\b.*");
     }
 
-    /** 有 PowerShell 7（pwsh）就用它：它支持 `&&`，比 5.1 更接近模型习惯。 */
-    private static boolean pwshAvailable() {
-        try {
-            Process p = new ProcessBuilder("pwsh", "-NoProfile", "-Command", "exit 0")
-                .redirectErrorStream(true).start();
-            return p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     @Override
-    public ToolResult execute(Map<String, Object> arguments) {        try {
+    public ToolResult execute(Map<String, Object> arguments) {
+        try {
             String command = getRequiredStringArg(arguments, "command");
             String workdir = getStringArg(arguments, "workdir", null);
-            int timeout = arguments.containsKey("timeout") ? 
-                ((Number) arguments.get("timeout")).intValue() : 300;
+            int timeout = getIntArg(arguments, "timeout", 300);
 
             log.info("执行命令: {}", command);
 
-            ProcessBuilder pb = new ProcessBuilder();
+            // 目标目录先解析+检查，别把不存在的目录塞进终端（那只会回一句看不懂的报错）
+            String dir = null;
+            if (workdir != null && !workdir.isBlank()) {
+                dir = resolvePath(workdir);
+                if (!new File(dir).isDirectory()) {
+                    return error("工作目录不存在: " + dir
+                        + "（先 create_directory 建出来，或检查路径）");
+                }
+            }
 
-            // 根据操作系统设置 shell。
-            //
-            // Windows 上原来用 `cmd /c`，模型写的是 Unix 风格命令（ls / cat / rm / pwd），
-            // cmd 里根本没有这些 → 实测报 `'ls' 不是内部或外部命令`（退出码 1），
-            // 后面还跟着 `系统找不到指定的文件`（退出码 2）。
-            // 改成 PowerShell：ls/cat/rm/cp/mv/pwd 都是内置别名，能直接跑通。
-            // 另外 PS 5.1 不认 `&&` 串联，这里顺手换成 `;`（模型很爱写 `ls && pwd`）。
+            String prepared = command;
             if (isWindows()) {
                 // 【实测】模型两种写法都会用：
-                //   ls -la            → PowerShell 的别名，用 cmd 会报"不是内部或外部命令"
-                //   rmdir /s /q xxx   → cmd 的开关，用 PowerShell 会报"找不到与参数名称/q匹配的参数"
-                // 所以按写法分流：带 cmd 风格开关的交给 cmd /c，其余交给 PowerShell。
-                // 输出编码：Windows 控制台默认用 GBK 输出，Java 侧按 UTF-8 读会变乱码
-                // （实测 `ls` 返回的"目录: …"就是乱码，模型根本读不懂）。让子进程直接吐 UTF-8。
-                if (looksLikeCmd(command)) {
-                    pb.command("cmd", "/c", "chcp 65001>nul & " + command);
+                //   ls -la            → PowerShell 别名，用 cmd 会报"不是内部或外部命令"
+                //   rmdir /s /q xxx   → cmd 开关，用 PowerShell 会报"找不到与参数名称/q匹配的参数"
+                // 所以按写法分流：带 cmd 风格开关的交给 `cmd /c`（在常驻终端里跑，不另起 shell），
+                // 其余按 PowerShell 走，并把 Unix 写法翻译过来。
+                if (looksLikeCmd(prepared)) {
+                    prepared = "cmd /c '" + prepared.replace("'", "''") + "'";
                 } else {
-                    String shell = pwshAvailable() ? "pwsh" : "powershell";
-                    String prefix = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; ";
-                    // 模型很爱写 Unix 风格（实测 `ls -la` → "找不到与参数名称 la 匹配"）。
-                    // 只翻下面这些确定的写法，不做通用猜测；翻过就在日志里留痕。
-                    String translated = unixToPowerShell(command);
+                    // PowerShell 5.1 不认 `&&`：模型很爱写 `ls && pwd`，换成 `;`
+                    String translated = unixToPowerShell(prepared).replace("&&", ";");
                     if (!translated.equals(command)) {
                         log.info("命令含 Unix 写法，已改写为 PowerShell: {} → {}", command, translated);
                     }
-                    pb.command(shell, "-NoProfile", "-NonInteractive", "-Command",
-                        prefix + translated.replace("&&", ";"));
+                    prepared = translated;
                 }
-            } else {
-                pb.command("sh", "-c", command);
             }
 
-            if (workdir != null && !workdir.isBlank()) {
-                pb.directory(new File(resolvePath(workdir)));
-            } else if (currentWorkspace() != null) {
-                // 未指定workdir时，默认在会话绑定的工作区中执行
-                pb.directory(new File(currentWorkspace()));
+            String key = currentWorkspace() == null ? "default" : currentWorkspace();
+            PersistentShell.RunResult r = terminal.run(key, prepared, dir, timeout);
+
+            if (r.errorText() != null) {
+                return error(r.errorText());
             }
-
-            pb.redirectErrorStream(false);
-
-            Process process = pb.start();
-
-            // 读取stdout
-            StringBuilder stdout = new StringBuilder();
-            StringBuilder stderr = new StringBuilder();
-
-            Thread stdoutThread = new Thread(() -> {
-                try (var reader = new BufferedReader(new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stdout.append(line).append("\n");
-                    }
-                } catch (IOException e) {
-                    log.warn("读取stdout失败", e);
-                }
-            });
-
-            Thread stderrThread = new Thread(() -> {
-                try (var reader = new BufferedReader(new java.io.InputStreamReader(process.getErrorStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stderr.append(line).append("\n");
-                    }
-                } catch (IOException e) {
-                    log.warn("读取stderr失败", e);
-                }
-            });
-
-            stdoutThread.start();
-            stderrThread.start();
-
-            boolean finished = process.waitFor(timeout, TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                return error("命令执行超时（" + timeout + "秒）");
-            }
-
-            stdoutThread.join(5000);
-            stderrThread.join(5000);
-
-            int exitCode = process.exitValue();
-            String result = stdout.toString();
-            String errors = stderr.toString();
 
             StringBuilder sb = new StringBuilder();
-            if (!result.isEmpty()) {
-                sb.append("输出:\n").append(result);
-            }
-            if (!errors.isEmpty()) {
-                sb.append("错误:\n").append(errors);
-            }
-            sb.append("退出码: ").append(exitCode);
-
-            if (exitCode == 0) {
-                return success(sb.toString());
+            if (!r.output().isEmpty()) {
+                sb.append("输出:\n").append(r.output()).append("\n");
             } else {
-                return error("命令执行失败（退出码: " + exitCode + "）\n" + sb);
+                sb.append("（这条命令没有输出）\n");
             }
+            if (r.cwd() != null) {
+                sb.append("当前目录: ").append(r.cwd()).append("\n");
+            }
+            Integer code = r.exitCode();
+            sb.append("退出码: ").append(code != null ? code : (r.ok() ? 0 : 1));
 
+            if (r.ok() && (code == null || code == 0)) {
+                return success(sb.toString());
+            }
+            return error("命令执行失败（退出码: " + (code != null ? code : "非0") + "）\n" + sb);
         } catch (Exception e) {
             return error("命令执行异常: " + e.getMessage());
         }

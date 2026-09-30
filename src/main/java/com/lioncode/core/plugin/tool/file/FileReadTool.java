@@ -55,10 +55,8 @@ public class FileReadTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            int offset = arguments.containsKey("offset") ? 
-                ((Number) arguments.get("offset")).intValue() : 1;
-            int limit = arguments.containsKey("limit") ? 
-                ((Number) arguments.get("limit")).intValue() : 1000;
+            int offset = getIntArg(arguments, "offset", 1);
+            int limit = getIntArg(arguments, "limit", 1000);
 
             Path filePath = Path.of(path);
             if (!Files.exists(filePath)) {

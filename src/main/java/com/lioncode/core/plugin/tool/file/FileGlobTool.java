@@ -57,8 +57,7 @@ public class FileGlobTool extends AbstractToolPlugin {
             }
             String path = resolvePath(rawPath);
             String pattern = getRequiredStringArg(arguments, "pattern");
-            int maxResults = arguments.containsKey("maxResults") ? 
-                ((Number) arguments.get("maxResults")).intValue() : 100;
+            int maxResults = getIntArg(arguments, "maxResults", 100);
 
             Path searchDir = Path.of(path);
             if (!Files.exists(searchDir)) {

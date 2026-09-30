@@ -36,10 +36,21 @@ public class FileLineCountTool extends AbstractToolPlugin {
     public ToolResult execute(Map<String, Object> arguments) {
         try {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
-            long count = Files.lines(Path.of(path)).count();
+            Path file = Path.of(path);
+            if (Files.isDirectory(file)) {
+                return error("这是目录，不是文件: " + path + "（先 list_directory/glob_files 找具体文件）");
+            }
+            if (!Files.exists(file)) {
+                return error("文件不存在: " + path);
+            }
+            // 【实测】原来用 Files.lines(Path) 读：它按 UTF-8 严格解码，用户机器上
+            // 记事本存的 ANSI/GBK 中文文件直接抛
+            // MalformedInputException: Input length = 1，line_count 报"统计失败"。
+            // word_count 早就用 readTextLines 容错读了，这里对齐（同一个毛病不该漏一个工具）。
+            long count = readTextLines(file).size();
             return success("行数: " + count);
         } catch (Exception e) {
-            return error("统计失败: " + e.getMessage());
+            return error("统计失败: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
         }
     }
 }
