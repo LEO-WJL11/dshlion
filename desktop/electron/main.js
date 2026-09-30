@@ -46,19 +46,29 @@ const AUTO_START_BACKEND = process.env.LIONBOX_AUTO_START !== '0';
 /**
  * 用哪个 java 起后端。
  *
- * 优先级：环境变量 LIONBOX_JAVA > **随包自带的精简 JRE** > PATH 里的 java。
- * 【为什么要优先用随包 JRE】桌面版是独立安装包，用户机器上很可能根本没装 Java；
- * 随包 JRE 只有 52MB，换来"装完就能用"。用 PATH 的 java 只是最后的兜底
- * （开发机上直接 npm start 时就是这条路）。
+ * 顺序：环境变量 LIONBOX_JAVA > **随包自带的精简 JRE** > **主程序安装目录里的 JRE** > PATH 里的 java。
+ *
+ * 【为什么要三级兜底】桌面版有两种打包法：
+ *   · 胖包（自带 runtime-jre，178MB）：用户机器上没装 Java 也能跑，但超过 GitHub 100MB
+ *     单文件上限，进不了仓库，只能走 Releases；
+ *   · 瘦包（不带 JRE，约 78MB，能进仓库）：这时就得靠"主程序安装目录里那份 JRE" —— 只要用户
+ *     装过 LionBox 主程序（%LOCALAPPDATA%\Programs\LionBox），桌面版就能直接用它的 Java，
+ *     不用再装一遍运行时。两级都找不到才退到 PATH 里的 java。
  */
 function resolveJavaBin() {
   if (process.env.LIONBOX_JAVA) return process.env.LIONBOX_JAVA;
-  const bundled = path.join(process.resourcesPath || '', 'backend', 'runtime-jre', 'bin',
-    process.platform === 'win32' ? 'java.exe' : 'java');
-  try {
-    if (fs.existsSync(bundled)) return bundled;
-  } catch {
-    /* 忽略：退化成 PATH 里的 java */
+  const exe = process.platform === 'win32' ? 'java.exe' : 'java';
+  const candidates = [
+    path.join(process.resourcesPath || '', 'backend', 'runtime-jre', 'bin', exe),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'LionBox', 'runtime-jre', 'bin', exe),
+    path.join(process.env['ProgramFiles'] || '', 'LionBox', 'runtime-jre', 'bin', exe),
+  ];
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {
+      /* 忽略：继续找下一个 */
+    }
   }
   return 'java';
 }
