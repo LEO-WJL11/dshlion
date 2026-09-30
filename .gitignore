@@ -45,12 +45,12 @@ hs_err_pid*
 *.log
 logs/
 
-# ===== è¿è¡Œæ—¶æ•°æ® =====
+# ===== è¿è¡Œæ—¶æ•°æ?=====
 .lioncode/
 workspace-data/
 
 # ===== å‚è€ƒæºç ç›®å½•ï¼ˆä¿ç•™ä½†ä¸è¿½è¸ªå…¶å†…éƒ¨å˜æ›´ï¼‰ =====
-# claude-code/ å’Œ deepseek-harness/ æ˜¯å‚è€ƒæºç ï¼ŒåŠ å…¥.gitignore
+# claude-code/ å’?deepseek-harness/ æ˜¯å‚è€ƒæºç ï¼ŒåŠ å…¥.gitignore
 claude-code/
 deepseek-harness/
 
@@ -77,9 +77,9 @@ dist/*.gguf
 dist/*.jar
 dist/runtime-vulkan/
 installer/release/
-release/
+/release/   # Ö»ºöÂÔ²Ö¿â¸ùÄ¿Â¼µÄ release/£¨Ô­À´µÄĞ´·¨»á°Ñ tools/release/ Ò²Ò»ÆğºöÂÔµô£¬ĞÂÔöµÄ·¢²¼½Å±¾½ø²»ÁË¿â£©
 
-# ===== è°ƒç ”èµ„æ–™ï¼ˆä½“ç§¯å¤§ã€éæºç ï¼‰=====
+# ===== è°ƒç ”èµ„æ–™ï¼ˆä½“ç§¯å¤§ã€éæºç ï¼?====
 _research/
 _hwres/
 
