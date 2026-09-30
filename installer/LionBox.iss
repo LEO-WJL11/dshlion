@@ -65,7 +65,10 @@
 ; 1.3.0：网络搜索改成**无头浏览器**（用系统里已装的 Edge/Chrome，不要 API 密钥）；
 ;         修好用户实测坏掉的工具：git_diff 带文件参数、git_remote add 不给名字、
 ;         git_log 空仓库、git_commit 无改动、modify_file 只给原文、word_count 非文本文件、translate 免密钥
-#define AppVersion     "1.3.0"
+; 1.3.1：**删掉会中断任务的东西**（同一工具同参数 5 次就终止任务、连续失败就跳过不执行、
+;         一轮最多 3 个工具调用多余的丢掉、轮次过多自动停止）；
+;         工具调用显示**统一成一行式**（🔧 调用工具：X … / ✅ X 完成 / ❌ X 失败），【系统提示】不再显示在对话里
+#define AppVersion     "1.3.1"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

@@ -1,10 +1,19 @@
 package com.lioncode.core.agent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 工具调用的「别再来一遍」守卫。
+ * 工具调用的「重复/连续失败」统计器。
+ *
+ * <p><b>2026-09-30 起它不再拦任何调用</b>：用户明确要求"能把任务中断的东西都删掉"，
+ * 于是"同样参数 5 次就终止任务""重复 3 次/连续失败 6 次就跳过不执行"这些行为全部删除，
+ * 只保留计数（排查用）。要不要继续尝试由模型判断，停不停由用户按界面上的 ⏹ 决定。
+ *
+ * <p>下面这段是它当初为什么存在（留着当背景，别再照着它把拦人逻辑加回来）：
  *
  * <p>存在的原因是一次真实跑测试（用户要求"把所有工具都调用一遍"）暴露的两个坑，
  * 两个都不是模型"笨"，而是 harness 没兜住：
@@ -28,6 +37,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@code java -cp target/classes com.lioncode.core.agent.ToolCallGuard}
  */
 public class ToolCallGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(ToolCallGuard.class);
+
 
     /** 第几次同样的调用开始"只提示不执行" */
     public static final int REPEAT_SKIP_AT = 3;
@@ -73,38 +85,20 @@ public class ToolCallGuard {
      * @param argsJson  参数（已序列化，用来判断"是不是一模一样"）
      */
     public Decision beforeCall(String sessionId, String toolName, String argsJson) {
-        if (sessionId == null || toolName == null) {
-            return Decision.ok();
-        }
-        String key = toolName + "|" + (argsJson == null ? "" : argsJson.trim());
-
-        int count = repeats
-            .computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
-            .merge(key, 1, Integer::sum);
-
-        if (count >= REPEAT_ABORT_AT) {
-            return new Decision(Verdict.ABORT,
-                "⏹ 已停止：同一个工具用同样的参数被调用了 " + count + " 次（" + toolName
-                + "），结果不会变。任务终止，避免继续空转。", count);
-        }
-        if (count >= REPEAT_SKIP_AT) {
-            return new Decision(Verdict.SKIP,
-                "【系统提示】" + toolName + " 用**完全相同的参数**已经调用过 " + (count - 1)
-                + " 次了，结果不会变，这次没有执行。请换做法：改参数、换工具，或者直接用已有结果回答。", count);
-        }
-
-        int fails = failureCount(sessionId, toolName);
-        if (fails >= FAIL_SKIP_AT) {
-            return new Decision(Verdict.SKIP,
-                "【系统提示】" + toolName + " 已经连续失败 " + fails + " 次，这次没有执行。"
-                + "先仔细看上一次的错误信息：是缺参数、参数名写错了，还是这个工具在这台机器上根本用不了？"
-                + "改不对就换个工具或直接说明做不到，不要继续硬试。", count);
-        }
-        if (fails == FAIL_WARN_AT) {
-            // 只在刚好到阈值时提醒一次，别每轮都念
-            return new Decision(Verdict.OK,
-                "【系统提示】" + toolName + " 已经连续失败 " + fails + " 次了。"
-                + "请照着错误信息把参数改成工具要求的名字/格式再试；再不行就换工具。", count);
+        // 【用户要求】这里原来是"同一工具同参数 5 次就**终止任务**、3 次就不再执行、
+        // 连续失败 6 次也不再执行，还往对话里插【系统提示】"。用户明确要求：
+        // **能把任务中断的东西都删掉** —— 于是这里只统计（日志用），永远放行。
+        //
+        // 判断该不该继续尝试是模型的事，停不停是用户按界面上的 ⏹ 的事；
+        // 我们不在背后替他们做决定，也不往对话里塞系统提示。
+        if (sessionId != null && toolName != null) {
+            String key = toolName + "|" + (argsJson == null ? "" : argsJson.trim());
+            int n = repeats
+                .computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
+                .merge(key, 1, Integer::sum);
+            if (n > 1 && log.isDebugEnabled()) {
+                log.debug("同一调用第 {} 次（不拦，照常执行）: {}", n, key);
+            }
         }
         return Decision.ok();
     }
@@ -136,72 +130,49 @@ public class ToolCallGuard {
     // 自测：java -cp target/classes com.lioncode.core.agent.ToolCallGuard
     // ------------------------------------------------------------------
     private static int passed = 0;
-    private static int failed = 0;
+    private static int failed = 0;   // 注意：与上面方法里的局部变量重名，见下
 
     public static void main(String[] args) {
         ToolCallGuard g = new ToolCallGuard();
         String s = "s1";
 
-        // 1) 第一次、第二次照常执行（可能是合理的重试）
-        check("第 1 次同样调用 → 执行", g.beforeCall(s, "create_directory", "{\"path\":\"a\"}").verdict() == Verdict.OK);
-        check("第 2 次同样调用 → 执行", g.beforeCall(s, "create_directory", "{\"path\":\"a\"}").verdict() == Verdict.OK);
-        // 2) 第三次开始只提示不执行
-        Decision d3 = g.beforeCall(s, "create_directory", "{\"path\":\"a\"}");
-        check("第 3 次同样调用 → 跳过执行", d3.verdict() == Verdict.SKIP);
-        check("跳过时带纠正提示", d3.hint() != null && d3.hint().contains("完全相同的参数"));
-        // 3) 参数不同就是新调用
-        check("参数不同 → 照常执行",
-            g.beforeCall(s, "create_directory", "{\"path\":\"b\"}").verdict() == Verdict.OK);
-        // 4) 第五次同样调用 → 终止
-        g.beforeCall(s, "create_directory", "{\"path\":\"a\"}");
-        Decision d5 = g.beforeCall(s, "create_directory", "{\"path\":\"a\"}");
-        check("第 5 次同样调用 → 终止任务", d5.verdict() == Verdict.ABORT);
-
-        // 5) 连续失败：失败 3 次后第 4 次调用先提醒（仍执行）；失败 6 次后不再执行
-        //    语义：计数是"已经失败过几次"，所以提醒出现在第 4 次调用、拦下出现在第 7 次调用
-        ToolCallGuard g2 = new ToolCallGuard();
-        String s2 = "s2";
-        for (int i = 1; i <= 3; i++) {           // 失败 3 次
-            check("失败第 " + i + " 次仍允许执行",
-                g2.beforeCall(s2, "number_convert", "{\"v\":" + i + "}").verdict() == Verdict.OK);
-            g2.afterCall(s2, "number_convert", false);
+        // 【现状】不再拦、不再终止：同样的调用问 10 次，10 次都要放行（用户要求删掉中断）
+        boolean allOk = true;
+        for (int i = 1; i <= 10; i++) {
+            Decision d = g.beforeCall(s, "git_status", "{\"path\":\"repo\"}");
+            if (d.verdict() != Verdict.OK || d.hint() != null) {
+                allOk = false;
+                System.out.println("  第 " + i + " 次被拦了: " + d.verdict() + " / " + d.hint());
+            }
         }
-        Decision warn = g2.beforeCall(s2, "number_convert", "{\"v\":4}");
-        check("连续失败 3 次后 → 提醒一次但仍执行",
-            warn.verdict() == Verdict.OK && warn.hint() != null && warn.hint().contains("连续失败"));
-        g2.afterCall(s2, "number_convert", false);   // 第 4 次也失败
-        for (int i = 5; i <= 6; i++) {               // 第 5、6 次失败
-            g2.beforeCall(s2, "number_convert", "{\"v\":" + i + "}");
-            g2.afterCall(s2, "number_convert", false);
+        check("同一调用连问 10 次都放行（不再跳过、不再终止任务）", allOk);
+
+        // 连续失败：以前 6 次之后就不执行了，现在照样放行
+        for (int i = 0; i < 10; i++) {
+            g.afterCall(s, "number_convert", false);
         }
-        Decision stop = g2.beforeCall(s2, "number_convert", "{\"v\":7}");
-        check("连续失败 6 次后 → 不再执行", stop.verdict() == Verdict.SKIP);
-        check("拦截提示里点名了工具和次数",
-            stop.hint() != null && stop.hint().contains("number_convert") && stop.hint().contains("6"));
-        g2.afterCall(s2, "number_convert", true);
-        check("成功后失败计数清零",
-            g2.failureCount(s2, "number_convert") == 0
-            && g2.beforeCall(s2, "number_convert", "{\"v\":8}").verdict() == Verdict.OK);
+        Decision dec = g.beforeCall(s, "number_convert", "{\"v\":7}");
+        check("连续失败 10 次后仍然放行（不再跳过、不再插【系统提示】）",
+            dec.verdict() == Verdict.OK && dec.hint() == null);
+        check("连续失败次数还是照常统计（日志/排查用）", g.failureCount(s, "number_convert") == 10);
 
-        // 6) reset 之后不再累计（新的一条用户消息）
-        ToolCallGuard g3 = new ToolCallGuard();
-        g3.beforeCall("s3", "x", "{}");
-        g3.beforeCall("s3", "x", "{}");
-        g3.reset("s3");
-        check("reset 后重新计数", g3.beforeCall("s3", "x", "{}").verdict() == Verdict.OK);
+        g.afterCall(s, "number_convert", true);
+        check("成功一次就把连续失败清零", g.failureCount(s, "number_convert") == 0);
 
+        System.out.println();
         System.out.println("通过 " + passed + " 项，失败 " + failed + " 项");
         if (failed > 0) {
             System.exit(1);
         }
     }
 
-    private static void check(String label, boolean ok) {
+    private static void check(String name, boolean ok) {
         if (ok) {
             passed++;
+            System.out.println("  [OK]   " + name);
         } else {
             failed++;
+            System.out.println("  [FAIL] " + name);
         }
-        System.out.println((ok ? "  [OK]   " : "  [FAIL] ") + label);
     }
 }

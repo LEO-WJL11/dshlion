@@ -856,17 +856,28 @@ var App = {
                 area.innerHTML = '<div class="welcome"><div class="welcome-icon">🦁</div><h1>LionBox</h1><p>此会话暂无消息，开始对话吧</p></div>';
                 return;
             }
+            // 工具行统一成"🔧 调用工具：X …" / "✅ X 完成" / "❌ X 失败"（和实时流一样的格式），
+            // 而且不顶头像；【系统提示】是给模型看的，不进对话显示。
             result.data.forEach(function(m) {
                 if (m.role === 'user') {
+                    if ((m.content || '').indexOf('【系统提示】') === 0) { return; }
                     self.appendMsg('user', self.formatContent(m.content || ''));
                 } else if (m.role === 'assistant') {
                     var c = m.content || '';
-                    if (m.toolCalls && m.toolCalls.length > 0) {
-                        c += '\n\n' + m.toolCalls.map(function(t) { return '🔧 ' + t.name; }).join('\n');
-                    }
-                    if (c) self.appendMsg('bot', self.formatContent(c));
+                    if (c.trim()) { self.appendMsg('bot', self.formatContent(c)); }
+                    (m.toolCalls || []).forEach(function(t) {
+                        if (!t || !t.name) { return; }
+                        self.appendMsg('bot',
+                            '<span style="font-size:12px;color:#74b9ff">🔧 调用工具：<b>'
+                            + self.escapeHtml(t.name) + '</b> …</span>', true);
+                    });
                 } else if (m.role === 'tool') {
-                    self.appendMsg('bot', '<span style="font-size:12px;color:#6a6a80">🔧 工具结果: ' + (m.toolName || '') + '</span>');
+                    var body = String(m.content || '');
+                    var bad = body.indexOf('工具执行错误') >= 0 || body.indexOf('执行异常') >= 0
+                              || body.indexOf('失败') === 0;
+                    self.appendMsg('bot', '<span style="font-size:12px;color:'
+                        + (bad ? '#e17055' : '#00b894') + '">' + (bad ? '❌ ' : '✅ ')
+                        + self.escapeHtml(m.toolName || '') + (bad ? ' 失败' : ' 完成') + '</span>', true);
                 }
                 // system消息不显示
             });
@@ -958,7 +969,15 @@ var App = {
         }).then(function(r) { return r.json(); })
           .then(function(result) {
             var toolsHtml = self.toolLines.join('');
-            botDiv.querySelector('.msg-body').innerHTML = toolsHtml + (result.success ? self.formatContent(result.data) : '<span style="color:#e17055">❌ ' + (result.error || '未知错误') + '</span>');
+            var text = result.success ? (result.data || '') : '';
+            botDiv.querySelector('.msg-body').innerHTML = toolsHtml
+                + (result.success ? self.formatContent(text)
+                                  : '<span style="color:#e17055">❌ ' + (result.error || '未知错误') + '</span>');
+            // 这一轮模型只调了工具、没写正文：别在上面挂个 🦁，保持一行行工具行
+            if (result.success && !String(text).trim()) {
+                var av = botDiv.querySelector('.msg-avatar');
+                if (av) { av.innerHTML = ''; }
+            }
             self.finishProcessing();
           })
           .catch(function(e) {
@@ -1139,14 +1158,16 @@ var App = {
           .catch(function(e) { alert('操作失败: ' + e.message); });
     },
 
-    appendMsg: function(role, html) {
+    appendMsg: function(role, html, noAvatar) {
         var area = document.getElementById('msgArea');
         var welcome = area.querySelector('.welcome');
         if (welcome) welcome.remove();
 
         var div = document.createElement('div');
         div.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
-        div.innerHTML = '<div class="msg-avatar">' + (role === 'user' ? '👤' : '🦁') + '</div><div class="msg-body">' + html + '</div>';
+        // 工具调用/结果那些行不该顶个 🦁：用户要的格式就是一行一行干净的工具行
+        var face = noAvatar ? '' : (role === 'user' ? '👤' : '🦁');
+        div.innerHTML = '<div class="msg-avatar">' + face + '</div><div class="msg-body">' + html + '</div>';
         area.appendChild(div);
         area.scrollTop = area.scrollHeight;
         return div;

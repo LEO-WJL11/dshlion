@@ -313,10 +313,9 @@ public class AgentLoop {
                 }
             }
 
-            // 6.5 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用（多余的丢弃并提示模型）
-            int toolCountBeforeCap = toolCalls.size();
-            toolCalls = capToolsPerRound(sessionId, toolCalls);
-            boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
+            // 6.5 【用户要求】不再限制一轮几个工具调用：模型给几个就执行几个。
+            // 以前这里会把第 4 个之后的丢掉、并插一句【系统提示】——
+            // 那等于背着用户把模型干的活扔了，现在不这么干。
 
             // 7. 如果仍然没有工具调用，返回最终答案
             if (toolCalls.isEmpty()) {
@@ -374,38 +373,16 @@ public class AgentLoop {
                     return stopMsg;
                 }
                 if (toolCall.name() != null && !toolCall.name().isBlank()) {
-                    ToolCallGuard.Decision decision =
-                        toolGuard.beforeCall(sessionId, toolCall.name(), argsFingerprint(toolCall.arguments()));
-                    if (decision.verdict() == ToolCallGuard.Verdict.ABORT) {
-                        log.warn("重复调用终止任务: {} (第 {} 次)", toolCall.name(), decision.count());
-                        eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
-                            Map.of("error", "重复调用", "tool", toolCall.name()),
-                            "重复调用，已终止");
-                        soundNotifier.play(SoundNotifier.Kind.ERROR);
-                        conversationHistory.addMessage(ConversationMessage.assistant(sessionId, decision.hint()));
-                        return decision.hint();
-                    }
-                    if (decision.verdict() == ToolCallGuard.Verdict.SKIP) {
-                        log.info("跳过重复/连续失败的调用: {} (第 {} 次)", toolCall.name(), decision.count());
-                        conversationHistory.addMessage(
-                            ConversationMessage.toolResult(sessionId, toolCall.id(), toolCall.name(),
-                                "（未执行）" + decision.hint()));
-                        continue;
-                    }
-                    if (decision.hint() != null) {
-                        addNotice(sessionId, decision.hint());
-                    }
+                    // 【用户要求】这里原来会"重复调用就终止任务""连续失败就跳过不执行"，
+                    // 还会往对话里插【系统提示】。现在这些都没有了：
+                    // 要不要继续试由模型判断，停不停由用户按界面上的 ⏹ 决定。
+                    toolGuard.beforeCall(sessionId, toolCall.name(),
+                        argsFingerprint(toolCall.arguments()));   // 只登记，不拦
                     toolGuard.afterCall(sessionId, toolCall.name(),
                         executeTool(sessionId, toolCall, mode));
                 }
             }
 
-            // 9.5 单工具限制提示：告诉模型多余的调用被忽略了
-            if (droppedExtraTools) {
-                conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                    "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
-                    + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
-            }
 
             // 10. 更新消息列表，继续下一轮
             messages = buildMessages(sessionId, mode, userMessage);
@@ -535,13 +512,10 @@ public class AgentLoop {
                                 sink.next(AgentChunk.done(fullContent));
                                 sink.complete();
                             } else {
-                                // 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用
-                                int toolCountBeforeCap = toolCalls.size();
-                                toolCalls = capToolsPerRound(sessionId, toolCalls);
-                                boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
+                                // 【用户要求】不再限制一轮几个工具调用：模型给几个就执行几个
 
                                 // 有工具调用：保存助手消息，执行工具，然后继续下一轮
-                                sink.next(AgentChunk.text("\n\n🔧 正在执行工具调用...\n\n"));
+                                // 界面自己会按事件画"🔧 调用工具：X …"那一行，别再往正文里塞杂音文本
                                 
                                 String reasoning = reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null;
                                 List<ConversationMessage.ToolCallRecord> toolCallRecords = toolCalls.stream()
@@ -560,34 +534,9 @@ public class AgentLoop {
                                 // 执行所有工具调用
                                 for (ChatMessage.ToolCall toolCall : toolCalls) {
                                     if (toolCall.name() != null && !toolCall.name().isBlank()) {
-                                        ToolCallGuard.Decision decision = toolGuard.beforeCall(sessionId,
-                                            toolCall.name(), argsFingerprint(toolCall.arguments()));
-                                        if (decision.verdict() == ToolCallGuard.Verdict.ABORT) {
-                                            log.warn("重复调用终止任务: {} (第 {} 次)",
-                                                toolCall.name(), decision.count());
-                                            eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
-                                                Map.of("error", "重复调用", "tool", toolCall.name()),
-                                                "重复调用，已终止");
-                                            soundNotifier.play(SoundNotifier.Kind.ERROR);
-                                            conversationHistory.addMessage(
-                                                ConversationMessage.assistant(sessionId, decision.hint()));
-                                            sink.next(AgentChunk.text(decision.hint()));
-                                            sink.complete();
-                                            return;
-                                        }
-                                        if (decision.verdict() == ToolCallGuard.Verdict.SKIP) {
-                                            log.info("跳过重复/连续失败的调用: {} (第 {} 次)",
-                                                toolCall.name(), decision.count());
-                                            conversationHistory.addMessage(
-                                                ConversationMessage.toolResult(sessionId, toolCall.id(),
-                                                    toolCall.name(), "（未执行）" + decision.hint()));
-                                            sink.next(AgentChunk.toolCall(toolCall.name(), "已跳过（重复调用）"));
-                                            continue;
-                                        }
-                                        if (decision.hint() != null) {
-                                            conversationHistory.addMessage(
-                                                ConversationMessage.user(sessionId, decision.hint()));
-                                        }
+                                        // 同非流式：不拦、不跳过、不终止、不插系统提示
+                                        toolGuard.beforeCall(sessionId, toolCall.name(),
+                                            argsFingerprint(toolCall.arguments()));
                                         toolGuard.afterCall(sessionId, toolCall.name(),
                                             executeTool(sessionId, toolCall, mode));
                                         // 发送工具执行结果通知
@@ -595,12 +544,6 @@ public class AgentLoop {
                                     }
                                 }
 
-                                // 单工具限制提示
-                                if (droppedExtraTools) {
-                                    conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                                        "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
-                                        + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
-                                }
 
                                 // 继续下一轮（递归调用），使用更新后的消息列表
                                 List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
@@ -671,19 +614,10 @@ public class AgentLoop {
             return;
         }
 
-        // 轮次上限：本地模型一轮几十秒，真跑飞了宁可明确报错，
-        // 也不要让前端的 10 分钟等待超时来兜底（那样用户只看到"❌ 处理超时"，不知道卡在哪）
-        if (currentRound > MAX_TOOL_ROUNDS) {
-            String msg = "⏹ 工具调用轮次过多（" + currentRound + " 轮），已停止。"
-                + "任务可能陷入了重复尝试，建议把要求拆小一点再试。";
-            log.warn(msg + " 会话: {}", sessionId);
-            eventStore.recordEvent(sessionId, LionEvent.EventType.SYSTEM_ERROR,
-                Map.of("error", "轮次过多", "round", currentRound), "轮次过多已停止");
-            soundNotifier.play(SoundNotifier.Kind.ERROR);
-            conversationHistory.addMessage(ConversationMessage.assistant(sessionId, msg));
-            sink.next(AgentChunk.text(msg));
-            sink.complete();
-            return;
+        // 【用户要求】不再自动停止：以前超过 MAX_TOOL_ROUNDS 轮就"⏹ 已停止"，
+        // 现在让任务一直跑下去 —— 想停就按界面上的 ⏹（那是用户的决定，不是我们的）。
+        if (currentRound % 50 == 0) {
+            log.info("工具轮次已到 {} 轮（不自动停止）会话: {}", currentRound, sessionId);
         }
 
         StringBuilder contentBuilder = new StringBuilder();
@@ -746,13 +680,9 @@ public class AgentLoop {
                         sink.next(AgentChunk.done(fullContent));
                         sink.complete();
                     } else {
-                        // 一轮最多 MAX_TOOLS_PER_ROUND 个工具调用
-                        int toolCountBeforeCap = toolCalls.size();
-                        toolCalls = capToolsPerRound(sessionId, toolCalls);
-                        boolean droppedExtraTools = toolCalls.size() < toolCountBeforeCap;
-
+                        // 不限一轮几个调用（用户要求：别再丢模型给的东西）
                         // 继续执行工具
-                        sink.next(AgentChunk.text("\n\n🔧 正在执行工具调用...\n\n"));
+                        // 界面自己会按事件画"🔧 调用工具：X …"那一行，别再往正文里塞杂音文本
                         
                         String reasoning = reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null;
                         List<ConversationMessage.ToolCallRecord> toolCallRecords = toolCalls.stream()
@@ -775,12 +705,6 @@ public class AgentLoop {
                             }
                         }
 
-                        // 单工具限制提示
-                        if (droppedExtraTools) {
-                            conversationHistory.addMessage(ConversationMessage.user(sessionId,
-                                "【系统提示】一轮最多 3 个工具调用。你上次一次返回了更多，多余的已被忽略，"
-                                + "本轮只执行了前 3 个。互不依赖的调用可以一轮一起给（最多 3 个），有依赖的请一轮给一个。"));
-                        }
 
                         List<ChatMessage> nextMessages = buildMessages(sessionId, mode, userMessage);
                         // 纠正计数原样带过去：整条用户消息共用一份纠正预算，防止反复重试
@@ -1289,16 +1213,13 @@ public class AgentLoop {
      */
     private List<ChatMessage.ToolCall> capToolsPerRound(String sessionId,
                                                         List<ChatMessage.ToolCall> toolCalls) {
-        if (toolCalls.size() <= MAX_TOOLS_PER_ROUND) {
-            return toolCalls;
+        // 【用户要求】不再限制一轮几个：模型给多少就给多少执行。
+        // （这个方法名保留着，免得外面还有调用点；里面已经不做任何截断。）
+        if (toolCalls.size() > MAX_TOOLS_PER_ROUND) {
+            log.info("模型一次返回 {} 个工具调用，全部执行（不再截断）- 会话: {}",
+                toolCalls.size(), sessionId);
         }
-        int extra = toolCalls.size() - MAX_TOOLS_PER_ROUND;
-        log.warn("模型一次返回 {} 个工具调用，本轮只执行前 {} 个（剩 {} 个请下一轮再给）- 会话: {}",
-            toolCalls.size(), MAX_TOOLS_PER_ROUND, extra, sessionId);
-        eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_ERROR,
-            Map.of("droppedCount", extra, "limit", MAX_TOOLS_PER_ROUND),
-            "一轮工具数限制：已忽略多余工具调用 " + extra + " 个");
-        return List.copyOf(toolCalls.subList(0, MAX_TOOLS_PER_ROUND));
+        return toolCalls;
     }
 
     /**
