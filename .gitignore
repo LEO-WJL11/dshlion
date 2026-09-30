@@ -120,3 +120,7 @@ dist/runtime-jre/
 # Python ??
 __pycache__/
 *.pyc
+
+# Electron 打包用的暂存运行时（101MB，本机从已安装的 LionBox 拷过来，不入库）
+desktop/electron/staging-backend/
+desktop/electron/dist/

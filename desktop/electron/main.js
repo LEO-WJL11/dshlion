@@ -42,7 +42,26 @@ const BUNDLED_JAR_NAME = 'lion-code-agent-harness.jar';
 const ENV_JAR = process.env.LIONBOX_JAR || '';
 /** 设为 0 则不自动拉起后端。 */
 const AUTO_START_BACKEND = process.env.LIONBOX_AUTO_START !== '0';
-const JAVA_BIN = process.env.LIONBOX_JAVA || 'java';
+
+/**
+ * 用哪个 java 起后端。
+ *
+ * 优先级：环境变量 LIONBOX_JAVA > **随包自带的精简 JRE** > PATH 里的 java。
+ * 【为什么要优先用随包 JRE】桌面版是独立安装包，用户机器上很可能根本没装 Java；
+ * 随包 JRE 只有 52MB，换来"装完就能用"。用 PATH 的 java 只是最后的兜底
+ * （开发机上直接 npm start 时就是这条路）。
+ */
+function resolveJavaBin() {
+  if (process.env.LIONBOX_JAVA) return process.env.LIONBOX_JAVA;
+  const bundled = path.join(process.resourcesPath || '', 'backend', 'runtime-jre', 'bin',
+    process.platform === 'win32' ? 'java.exe' : 'java');
+  try {
+    if (fs.existsSync(bundled)) return bundled;
+  } catch {
+    /* 忽略：退化成 PATH 里的 java */
+  }
+  return 'java';
+}
 
 // ---------------------------------------------------------------------------
 // 状态
@@ -158,7 +177,11 @@ function startBackendIfConfigured() {
     return null;
   }
   console.log('[lionbox] 启动后端:', jar);
-  const child = spawn(JAVA_BIN, ['-jar', jar], {
+  const javaBin = resolveJavaBin();
+  console.log('[lionbox] 用这个 java:', javaBin);
+  // cwd 设成 jar 所在目录：应用是按"jar 同级目录 / 工作目录"找本地模型运行时的
+  // （LocalModelRuntime.appDirs），cwd 不对就找不到随包的 llama-server.exe 和权重。
+  const child = spawn(javaBin, ['-jar', jar], {
     cwd: path.dirname(jar),
     stdio: 'inherit',
     windowsHide: false

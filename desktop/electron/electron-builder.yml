@@ -21,17 +21,32 @@ files:
   - package.json
 
 # ---------------------------------------------------------------------------
-# 随包附带后端 fat jar（可选）
-# 打开下面的 extraResources，并确保源文件存在 —— 源文件不存在时 electron-builder
-# 会直接报错，所以默认注释掉，等 jar 就位再开。
+# 随包附带后端（fat jar + 精简 JRE + 本地模型运行时）
 #
-# 打包后主进程会在 process.resourcesPath/backend/lion-code-agent-harness.jar 找到它，
-# 并用 `java -jar` 拉起（见 main.js 的 resolveBackendJar / startBackendIfConfigured）。
-# 另一种更省事的方式：不随包分发，改在运行时设 LIONBOX_JAR=<绝对路径>。
+# 【桌面版为什么要把后端打进去】用户装桌面版就是想要"装完就是能用的一个窗口"，
+# 而不是"先去装另一个包，再回来打开我"。后端 fat jar 35MB、精简 JRE 52MB、
+# llama.cpp 运行时 49MB，合起来让安装包大一倍，但换来完全不依赖用户机器上的 Java、
+# 也不依赖另一个安装包 —— 这是桌面版和网页版唯一实打实的区别。
+#
+# 主进程会在 process.resourcesPath/backend/ 下找：
+#   lion-code-agent-harness.jar   → 用 java -jar 拉起
+#   runtime-jre/bin/java.exe      → 优先用这个 java（机器上没装 Java 也能跑）
+#   runtime-vulkan/llama-server.exe → 本地模型运行时（权重首次使用时自动下载）
 # ---------------------------------------------------------------------------
-# extraResources:
-#   - from: ../../target/lion-code-agent-harness-1.0.0-SNAPSHOT.jar
-#     to: backend/lion-code-agent-harness.jar
+extraResources:
+  - from: ../../target/lion-code-agent-harness-1.0.0-SNAPSHOT.jar
+    to: backend/lion-code-agent-harness.jar
+  # 【为什么用相对暂存目录而不是 ${env:XXX}】electron-builder 的 from 字段不认
+  # ${env:VAR} 这种写法 —— 实测它把整串当字面路径，日志里就一句
+  # "file source doesn't exist"，包照样出，只是里面**没有** JRE，静默少东西。
+  # 所以改成先把两个运行时拷到 staging-backend/（该目录在 .gitignore 里），再用相对路径打。
+  - from: ./staging-backend/runtime-jre
+    to: backend/runtime-jre
+  - from: ./staging-backend/runtime-vulkan
+    to: backend/runtime-vulkan
+  # 内置技能（SKILL.md）：后端按"jar 同级目录"找 skills/，所以也放在 backend 下
+  - from: ../../skills
+    to: backend/skills
 
 win:
   target:

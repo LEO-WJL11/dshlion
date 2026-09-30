@@ -30,16 +30,19 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        // 目标平台由 gradle.properties 的 platformType / platformVersion 决定
-        create(
-            providers.gradleProperty("platformType"),
-            providers.gradleProperty("platformVersion")
-        )
-
+        // 【2026-09-30 实测修正】原来写的是 create(platformType, platformVersion)，也就是
+        // ideaIC:2026.1 —— 构建直接失败：
+        //   "IntelliJ IDEA Community (IC) is no longer published since 2025.3 (253),
+        //    use: intellijIdea("2026.1")"
+        // 也就是说 IDEA 社区版**从 2025.3 起不再单独发布** ideaIC 构件了，必须改用
+        // intellijIdea(...) 这个统一的入口。参考官方仓库里 ideaIC-2026.1.pom 一个都下载不到
+        // （maven central / download.jetbrains.com / cache-redirector 全试过，见构建日志）。
+        //
         // 面向 2026.2+ 构建时，JCEF 变成独立 bundled plugin，需要显式加这条依赖
         // （同时 plugin.xml 里要有 <depends>com.intellij.modules.jcef</depends>）。
         // 本工程用 2026.1 构建，JCEF 属于平台本体，因此默认注释掉以兼容 2026.1。
         // bundledPlugin("intellij.platform.ui.jcef")
+        intellijIdea(providers.gradleProperty("platformVersion"))
     }
 }
 
