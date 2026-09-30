@@ -1253,163 +1253,196 @@ var App = {
             var hasCurrent = models.some(function(m) { return m.current; });
 
             var html = '';
-            // 配置的模型和实际在用的不一致时（例如选的量化还没下载），明确提示
-            if (d.modelMismatch) {
-                html += '<div style="border:1px solid #e17055;background:#2a1f1c;border-radius:8px;'
-                     +  'padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:#ffb8a3">'
-                     +  '⚠️ ' + self.escapeHtml(d.modelMismatch)
-                     +  '<div style="margin-top:8px">'
-                     +  '<button class="btn btn-sm" onclick="App.switchLlamaModel(\''
-                     +  self.escapeAttr(d.modelFile) + '\')">立即下载并切换</button></div></div>';
+
+            // ── 顶部一句话：现在用的是哪份、文件在哪 ──
+            var dCur = null;
+            models.forEach(function(m) { if (m.file === d.modelFile) { dCur = m; } });
+            var curName = dCur ? dCur.label : (d.modelFile || '未选');
+            var curSize = dCur ? (dCur.sizeText || (dCur.sizeGb + ' GB')) : '';
+            var curState = '';
+            if (hasCurrent) {
+                curState = '<span style="color:#00b894">✓ 正在使用</span>';
+            } else if (dCur && dCur.downloaded) {
+                curState = '<span style="color:#6c5ce7">已选好·发一条消息就会用它</span>';
+            } else {
+                curState = '<span style="color:#e17055">还没下载</span>';
             }
-            html += '<p style="color:#a0a0b8;margin-bottom:14px;font-size:12px;line-height:1.7">'
-                + '这里改的是<b style="color:#e8e8f0">本机 llama.cpp 的启动参数</b>（随盒子一起跑的那个推理进程）。'
-                + '改完点保存，然后<b style="color:#e8e8f0">重启本地模型</b>才会生效。<br>'
-                + '拿不准的项就别动，默认值都是按这台机器调过的。</p>';
-
-            // ---- 模型版本（可以同时存好几份，想用哪份点哪份）----
             html += '<div style="' + box + '">';
-            html += '<div style="font-weight:600;margin-bottom:8px">模型版本</div>';
+            html += '<div style="font-weight:600;margin-bottom:10px">模型</div>';
+            html += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;'
+                 +  'padding:10px 12px;background:#12121f;border:1px solid #2d2d4a;border-radius:10px">'
+                 +  '<div style="flex:1;min-width:200px">'
+                 +  '<div style="font-size:11.5px;color:#6a6a80">当前在用</div>'
+                 +  '<div style="font-size:15px;color:#e8e8f0;font-weight:600;margin-top:2px">'
+                 +  self.escapeHtml(curName)
+                 +  (curSize ? ' <span style="font-size:12px;color:#6a6a80;font-weight:400">' + curSize + '</span>' : '')
+                 +  '</div>'
+                 +  '<div style="font-size:12px;margin-top:3px">' + curState + '</div>'
+                 +  '</div>'
+                 +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 打开模型文件夹</button>'
+                 +  '</div>';
+            html += '<div style="font-size:11.5px;color:#6a6a80;margin-top:8px;line-height:1.7">'
+                 +  '模型文件放在 <span style="font-family:monospace;color:#a0a0b8">'
+                 +  self.escapeHtml(d.modelDir || '') + '</span>：'
+                 +  '想换版本就在下面点「下载」，'
+                 +  '你自己的 .gguf 丢进去也会出现在下面。</div>';
 
-            // 模型目录：用户问过“文件到底放哪”，这里把路径直接给出来，
-            // 并且说清楚可以自己往里面塞 GGUF。
-            var mdir = d.modelDir || '';
-            html += '<div style="border:1px solid #2d2d4a;background:#1a1a2e;border-radius:8px;'
-                 +  'padding:9px 11px;margin-bottom:10px;font-size:11.5px;color:#a0a0b8;line-height:1.75">'
-                 +  '<div>模型目录：<span style="font-family:monospace;color:#e8e8f0" title="'
-                 +  self.escapeAttr(mdir) + '">' + self.escapeHtml(mdir) + '</span></div>'
-                 +  '<div>下载的权重都放在这里；<b style="color:#e8e8f0">你自己的 .gguf 直接丢进去，'
-                 +  '下面就会出现，点「使用」就行</b>。一份权重一个文件，'
-                 +  '可以同时存好几份（下载进度会弹窗显示）。</div>'
-                 +  '<div style="margin-top:7px">'
-                 +  '<button class="btn btn-sm" onclick="App.openModelsDir()">📂 打开文件夹</button>'
-                 +  '<button class="btn btn-sm" style="margin-left:6px" onclick="App.renderLlamaTab()">🔄 刷新</button>'
-                 +  '</div></div>';
-
-            // 一行 = 一份权重：名字、状态、体积、按钮（下载 / 使用 / 重启生效）
-            var modelRow = function(m) {
-                var tags = '';
-                if (m.current) {
-                    tags += ' <span style="color:#6c5ce7">· 正在用</span>';
-                } else if (m.configured) {
-                    tags += hasCurrent
-                        ? ' <span style="color:#e17055">· 已选中但没在用</span>'
-                        : ' <span style="color:#6c5ce7">· 当前选择（还没启动）</span>';
-                }
-                // 自己塞的小模型可能不到 1 GB，后端会给 sizeText（按 MB 显示）
-                var sizeTxt = m.sizeText ? m.sizeText : (m.sizeGb + ' GB');
-                var state = sizeTxt + (m.downloading
-                    ? ' · <span style="color:#fdcb6e">正在下载…</span>'
-                    : ' · ' + (m.downloaded ? '已下载' : '未下载'));
-                var row = '<tr style="border-bottom:1px solid #23233a">'
-                        +    '<td style="padding:7px 4px">'
-                        +      '<div style="color:#e8e8f0">' + self.escapeHtml(m.label) + tags + '</div>'
-                        +      '<div style="color:#6a6a80;font-size:11px">' + self.escapeHtml(m.note || '') + '</div>'
-                        +      '<div style="color:#6a6a80;font-size:11px">' + state + '</div>'
-                        +      (m.downloading
-                                  ? '<div style="margin-top:5px;height:6px;background:#12121f;'
-                                    + 'border:1px solid #2d2d4a;border-radius:4px;overflow:hidden">'
-                                    + '<div id="dlrowfill_' + self.escapeAttr(m.file) + '" '
-                                    + 'style="height:100%;width:0%;background:#6c5ce7;transition:width .4s">'
-                                    + '</div></div>'
-                                  : '')
-                        +    '</td>'
-                        +    '<td style="padding:7px 4px;text-align:right;white-space:nowrap">';
+            // ── 一份模型一张卡：一句话 + 一个主动作 ──
+            var modelCard = function(m, custom) {
+                var sizeTxt = m.sizeText ? m.sizeText : (m.sizeGb + ' GB');
+                // 状态只有四种说法，不再用“已选中但没在用”这种内部话
+                var state, btn = '';
                 if (m.downloading) {
-                    row += '<button class="btn btn-sm" disabled>下载中…</button>';
+                    state = '<span style="color:#fdcb6e">正在下载…</span>';
+                    btn = '<button class="btn btn-sm" disabled>下载中</button>';
+                } else if (m.current) {
+                    state = '<span style="color:#00b894">✓ 正在使用</span>';
+                } else if (m.configured && m.downloaded) {
+                    state = '<span style="color:#6c5ce7">已选好·下一条消息就用它</span>';
+                    btn = '<button class="btn btn-sm" onclick="App.restartLocalModel()">立即加载</button>';
+                } else if (m.downloaded) {
+                    state = '<span style="color:#6a6a80">已下载，现在没用它</span>';
+                    btn = '<button class="btn btn-sm btn-primary" onclick="App.switchLlamaModel(\'' + m.file + '\')">用它</button>';
                 } else {
-                    if (!m.downloaded) {
-                        row += '<button class="btn btn-sm" title="先下载不切换，可以把几份都下好"'
-                             +        ' onclick="App.downloadLlamaModel(\'' + m.file + '\')">下载</button>';
-                    }
-                    if (!m.current) {
-                        row += '<button class="btn btn-sm" style="margin-left:6px"'
-                             +        ' onclick="App.switchLlamaModel(\'' + m.file + '\')">'
-                             +        (m.configured ? '重启生效' : '使用') + '</button>';
-                    }
+                    state = '<span style="color:#6a6a80">本机还没有这份权重</span>';
+                    btn = '<button class="btn btn-sm btn-primary" onclick="App.downloadLlamaModel(\'' + m.file + '\')">下载</button>';
                 }
-                row += '</td></tr>';
-                return row;
+                var card = '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;'
+                         +  'padding:10px 12px;margin-top:8px;background:#1a1a2e;'
+                         +  'border:1px solid ' + (m.current ? '#6c5ce7' : '#2d2d4a') + ';border-radius:10px">'
+                         +  '<div style="flex:1;min-width:200px">'
+                         +  '<div style="font-size:13.5px;color:#e8e8f0">'
+                         +  self.escapeHtml(m.label)
+                         +  ' <span style="font-size:12px;color:#6a6a80">' + sizeTxt + '</span>'
+                         +  (custom ? ' <span style="font-size:11px;color:#6a6a80">· 你自己放的</span>' : '')
+                         +  '</div>'
+                         +  '<div style="font-size:11.5px;color:#6a6a80;margin-top:3px">'
+                         +  self.escapeHtml(m.note || '') + '</div>'
+                         +  '<div style="font-size:12px;margin-top:5px">' + state + '</div>'
+                         +  (m.downloading
+                             ? '<div style="margin-top:6px;height:6px;background:#12121f;'
+                               + 'border:1px solid #2d2d4a;border-radius:4px;overflow:hidden">'
+                               + '<div id="dlrowfill_' + self.escapeAttr(m.file) + '" '
+                               + 'style="height:100%;width:0%;background:#6c5ce7;transition:width .4s">'
+                               + '</div></div>'
+                             : '')
+                         +  '</div>'
+                         +  '<div style="white-space:nowrap">' + btn + '</div>'
+                         +  '</div>';
+                return card;
             };
 
             var official = models.filter(function(m) { return !m.custom; });
             var custom = models.filter(function(m) { return m.custom; });
-            html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-            official.forEach(function(m) { html += modelRow(m); });
+            official.forEach(function(m) { html += modelCard(m, false); });
             if (custom.length) {
-                html += '<tr><td colspan="2" style="padding:10px 4px 4px;color:#a0a0b8;font-size:11.5px;'
-                     +  'border-top:1px solid #2d2d4a">你自己放进来的（' + custom.length
-                     +  '）——直接能用</td></tr>';
-                custom.forEach(function(m) { html += modelRow(m); });
+                html += '<div style="margin-top:14px;padding-top:10px;border-top:1px solid #2d2d4a;'
+                     +  'font-size:12px;color:#a0a0b8">你自己放进模型文件夹的（' + custom.length
+                     +  '）</div>';
+                custom.forEach(function(m) { html += modelCard(m, true); });
             }
-            html += '</table></div>';
-
-            // ---- 上下文 / 显存 ----
-            html += '<div style="' + box + '">';
-            html += '<div style="font-weight:600;margin-bottom:8px">上下文与显存</div>';
-            html += '<div style="' + grid + '">'
-                 + field('ctxSize', '上下文长度 -c', '越大越吃显存；本地模型默认 262144（256K）', d.ctxSize)
-                 + field('ngl', 'GPU 层数 -ngl', '999 = 全部放到显卡；0 = 纯 CPU', d.ngl)
-                 + field('kvCacheTypeK', 'KV 缓存类型 K -ctk', 'q4_0 / q8_0 / f16；量化必须开 flash attention', d.kvCacheTypeK)
-                 + field('kvCacheTypeV', 'KV 缓存类型 V -ctv', '同上', d.kvCacheTypeV)
-                 + field('parallelSlots', '并行槽位 -np', '多槽位会把上下文平分，一般保持 1', d.parallelSlots)
-                 + '<div><label style="' + lbl + '">flash attention -fa</label>'
-                 +   '<select id="llama_flashAttn" style="' + inp + '">'
-                 +   '<option value="true"' + (String(d.flashAttn) === 'true' ? ' selected' : '') + '>开（on）</option>'
-                 +   '<option value="false"' + (String(d.flashAttn) === 'true' ? '' : ' selected') + '>关（off）</option>'
-                 +   '</select></div>'
-                 + '</div></div>';
-
-            // ---- 性能 ----
-            html += '<div style="' + box + '">';
-            html += '<div style="font-weight:600;margin-bottom:8px">性能</div>';
-            html += '<div style="' + grid + '">'
-                 + field('threads', 'CPU 线程 -t', '0 = 让 llama.cpp 自己决定', d.threads)
-                 + field('batchSize', '批大小 -b', '预填充批次；显存紧张就调小', d.batchSize)
-                 + field('ubatchSize', '微批 -ub', '同上，一般不动', d.ubatchSize)
-                 + field('maxPredict', '单次生成上限 -n', '防止一轮写满上下文', d.maxPredict)
-                 + '</div></div>';
-
-            // ---- 采样 ----
-            html += '<div style="' + box + '">';
-            html += '<div style="font-weight:600;margin-bottom:8px">采样</div>';
-            html += '<div style="font-size:11.5px;color:#6a6a80;margin-bottom:8px">'
-                 + '出厂默认（temp 0.8、无重复惩罚）实测会让这个模型跑飞，别随手改回去。</div>';
-            html += '<div style="' + grid + '">'
-                 + field('temperature', '温度 --temp', '', d.temperature)
-                 + field('topP', 'top-p', '', d.topP)
-                 + field('topK', 'top-k', '0 = 关闭', d.topK)
-                 + field('minP', 'min-p', '0 = 关闭', d.minP)
-                 + field('repeatPenalty', '重复惩罚 --repeat-penalty', '1.0 = 关闭', d.repeatPenalty)
-                 + field('repeatLastN', '惩罚回看窗口 --repeat-last-n', '', d.repeatLastN)
-                 + field('seed', '随机种子 --seed', '-1 = 每次随机', d.seed)
-                 + '</div></div>';
-
-            // ---- 服务与自由参数 ----
-            html += '<div style="' + box + '">';
-            html += '<div style="font-weight:600;margin-bottom:8px">服务地址与自由参数</div>';
-            html += '<div style="' + grid + '">'
-                 + field('host', '监听地址 --host', '一般不动', d.host)
-                 + field('port', '端口 --port', '改了要同步改自定义 API 的地址', d.port)
-                 + '</div>';
-            html += '<div style="margin-top:10px"><label style="' + lbl + '">'
-                 + '额外参数（原样拼到命令行最后，能填任何这里没有的开关）</label>'
-                 + '<textarea id="llama_extraArgs" rows="2" style="' + inp + ';font-family:monospace"'
-                 + ' placeholder="例如：--no-mmap --log-disable">'
-                 + self.escapeHtml(d.extraArgs || '') + '</textarea></div>';
             html += '</div>';
 
-            // ---- 操作按钮 ----
-            html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-                 +  '<button class="btn btn-primary" onclick="App.saveLlamaConfig()">保存参数</button>'
-                 +  '<button class="btn" onclick="App.restartLocalModel()">重启本地模型</button>'
-                 +  '<span id="llamaMsg" style="font-size:12px;color:#6a6a80"></span></div>';
-            html += '<div style="margin-top:10px;font-size:11.5px;color:#6a6a80">'
-                 + '当前状态：' + (d.running ? '本地模型正在运行' : '本地模型未运行')
-                 + '；改完参数请点「重启本地模型」。</div>';
+            // ── 配置和实际用的不一致时，只给一个动作 ──
+            if (d.modelMismatch) {
+                html += '<div style="border:1px solid #e17055;background:#2a1f1c;border-radius:10px;'
+                     +  'padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:#ffb8a3">'
+                     +  '⚠️ ' + self.escapeHtml(d.modelMismatch)
+                     +  '<div style="margin-top:8px">'
+                     +  '<button class="btn btn-sm" onclick="App.downloadLlamaModel(\''
+                     +  self.escapeAttr(d.modelFile) + '\')">下载这一份</button></div></div>';
+            }
+
+
+            // ── 高级：llama.cpp 启动参数（默认收起，不懂就别动）──
+            html += '<div style="margin-top:16px;border-top:1px solid #2d2d4a;padding-top:12px">'
+                 +  '<button class="btn btn-sm" onclick="App.toggleLlamaAdvanced()" id="llamaAdvBtn">'
+                 +  '⚙️ 高级：llama.cpp 启动参数（不懂就别动）▾</button>'
+                 +  '<div style="font-size:11.5px;color:#6a6a80;margin-top:6px">'
+                 +  '下面是跑模型那个进程的启动参数（给懂 llama.cpp 的人用）：'
+                 +  '改完点保存，再点「重启本地模型」才生效。'
+                 +  '拿不准的项就别动，默认值是按这台机器调过的。</div>'
+                 +  '</div>';
+            html += '<div id="llamaAdvanced" style="display:none">';
+                // ---- 上下文 / 显存 ----
+                html += '<div style="' + box + '">';
+                html += '<div style="font-weight:600;margin-bottom:8px">上下文与显存</div>';
+                html += '<div style="' + grid + '">'
+                     + field('ctxSize', '上下文长度 -c', '越大越吃显存；本地模型默认 262144（256K）', d.ctxSize)
+                     + field('ngl', 'GPU 层数 -ngl', '999 = 全部放到显卡；0 = 纯 CPU', d.ngl)
+                     + field('kvCacheTypeK', 'KV 缓存类型 K -ctk', 'q4_0 / q8_0 / f16；量化必须开 flash attention', d.kvCacheTypeK)
+                     + field('kvCacheTypeV', 'KV 缓存类型 V -ctv', '同上', d.kvCacheTypeV)
+                     + field('parallelSlots', '并行槽位 -np', '多槽位会把上下文平分，一般保持 1', d.parallelSlots)
+                     + '<div><label style="' + lbl + '">flash attention -fa</label>'
+                     +   '<select id="llama_flashAttn" style="' + inp + '">'
+                     +   '<option value="true"' + (String(d.flashAttn) === 'true' ? ' selected' : '') + '>开（on）</option>'
+                     +   '<option value="false"' + (String(d.flashAttn) === 'true' ? '' : ' selected') + '>关（off）</option>'
+                     +   '</select></div>'
+                     + '</div></div>';
+
+                // ---- 性能 ----
+                html += '<div style="' + box + '">';
+                html += '<div style="font-weight:600;margin-bottom:8px">性能</div>';
+                html += '<div style="' + grid + '">'
+                     + field('threads', 'CPU 线程 -t', '0 = 让 llama.cpp 自己决定', d.threads)
+                     + field('batchSize', '批大小 -b', '预填充批次；显存紧张就调小', d.batchSize)
+                     + field('ubatchSize', '微批 -ub', '同上，一般不动', d.ubatchSize)
+                     + field('maxPredict', '单次生成上限 -n', '防止一轮写满上下文', d.maxPredict)
+                     + '</div></div>';
+
+                // ---- 采样 ----
+                html += '<div style="' + box + '">';
+                html += '<div style="font-weight:600;margin-bottom:8px">采样</div>';
+                html += '<div style="font-size:11.5px;color:#6a6a80;margin-bottom:8px">'
+                     + '出厂默认（temp 0.8、无重复惩罚）实测会让这个模型跑飞，别随手改回去。</div>';
+                html += '<div style="' + grid + '">'
+                     + field('temperature', '温度 --temp', '', d.temperature)
+                     + field('topP', 'top-p', '', d.topP)
+                     + field('topK', 'top-k', '0 = 关闭', d.topK)
+                     + field('minP', 'min-p', '0 = 关闭', d.minP)
+                     + field('repeatPenalty', '重复惩罚 --repeat-penalty', '1.0 = 关闭', d.repeatPenalty)
+                     + field('repeatLastN', '惩罚回看窗口 --repeat-last-n', '', d.repeatLastN)
+                     + field('seed', '随机种子 --seed', '-1 = 每次随机', d.seed)
+                     + '</div></div>';
+
+                // ---- 服务与自由参数 ----
+                html += '<div style="' + box + '">';
+                html += '<div style="font-weight:600;margin-bottom:8px">服务地址与自由参数</div>';
+                html += '<div style="' + grid + '">'
+                     + field('host', '监听地址 --host', '一般不动', d.host)
+                     + field('port', '端口 --port', '改了要同步改自定义 API 的地址', d.port)
+                     + '</div>';
+                html += '<div style="margin-top:10px"><label style="' + lbl + '">'
+                     + '额外参数（原样拼到命令行最后，能填任何这里没有的开关）</label>'
+                     + '<textarea id="llama_extraArgs" rows="2" style="' + inp + ';font-family:monospace"'
+                     + ' placeholder="例如：--no-mmap --log-disable">'
+                     + self.escapeHtml(d.extraArgs || '') + '</textarea></div>';
+                html += '</div>';
+
+                // ---- 操作按钮 ----
+                html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+                     +  '<button class="btn btn-primary" onclick="App.saveLlamaConfig()">保存参数</button>'
+                     +  '<button class="btn" onclick="App.restartLocalModel()">重启本地模型</button>'
+                     +  '<span id="llamaMsg" style="font-size:12px;color:#6a6a80"></span></div>';
+                html += '<div style="margin-top:10px;font-size:11.5px;color:#6a6a80">'
+                     + '当前状态：' + (d.running ? '本地模型正在运行' : '本地模型未运行')
+                     + '；改完参数请点「重启本地模型」。</div>';
+            html += '</div>';
 
             document.getElementById('settingsContent').innerHTML = html;
         });
+    },
+
+    /** 高级参数的展开 / 收起 */
+    toggleLlamaAdvanced: function() {
+        var box2 = document.getElementById('llamaAdvanced');
+        var btn = document.getElementById('llamaAdvBtn');
+        if (!box2) { return; }
+        var show = box2.style.display === 'none';
+        box2.style.display = show ? 'block' : 'none';
+        if (btn) {
+            btn.innerHTML = '⚙️ 高级：llama.cpp 启动参数（不懂就别动）' + (show ? '▴' : '▾');
+        }
     },
 
     /** 保存 llama.cpp 参数 */
