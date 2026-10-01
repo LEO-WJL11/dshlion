@@ -1,0 +1,22 @@
+[package]
+name = "lionbox-desktop"
+version = "1.5.1"
+description = "LionBox desktop shell (Tauri 2 wrapping the local WebUI)"
+authors = ["LionCode"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# 发布版把体积压到最小：Tauri 靠系统 WebView，本来就小，
+# 再去掉调试符号 + 开 LTO，EXE 能再小几百 KB。
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

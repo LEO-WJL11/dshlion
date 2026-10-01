@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!--
+  Tauri 需要一个 frontendDist 目录放在包里（它的资源加载器要求）。
+  这个页面**只在"后端还没起来/起不来"的那几秒**会露脸 —— 正常情况窗口直接加载
+  http://127.0.0.1:8080 上后端发的那份 WebUI，也就是浏览器里看到的同一个界面。
+  做成暗色、和主界面一个调子，避免闪一下白屏。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>LionBox</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0d0e10; color: #e4e6e8;
+                 font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+    .wrap { height: 100%; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; }
+    .mark { font-size: 44px; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0; }
+    p { color: #a3a8ae; font-size: 13px; margin: 0; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           background: #6f7f95; animation: pulse 1.2s infinite ease-in-out; }
+    @keyframes pulse { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark">🦁</div>
+    <h1>LionBox</h1>
+    <p><span class="dot"></span> 正在启动本地服务 127.0.0.1:8080 …</p>
+  </div>
+</body>
+</html>

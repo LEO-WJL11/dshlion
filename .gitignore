@@ -127,3 +127,8 @@ desktop/electron/dist/
 
 # dist/skills/ is a build-time copy of the repo skills/ dir (artifact, never committed)
 dist/skills/
+
+# Tauri/Rust build output & deps
+desktop/tauri/node_modules/
+desktop/tauri/src-tauri/target/
+desktop/tauri/src-tauri/gen/schemas/

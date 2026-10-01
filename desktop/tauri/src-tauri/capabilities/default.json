@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "LionBox 桌面壳：窗口里加载的是本地后端发的 WebUI，壳自己不开放任何前端 IPC 能力（越少越好）。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
