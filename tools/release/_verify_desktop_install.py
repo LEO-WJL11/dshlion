@@ -22,7 +22,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-EXE = os.path.join(ROOT, 'installer', 'release', 'LionBox-Desktop-1.5.2-Setup.exe')
+EXE = os.path.join(ROOT, 'installer', 'release', 'LionBox-Desktop-1.5.3-Setup.exe')
 # 装到 %TEMP% 而不是仓库里 —— 和用户"装到自己用户目录"最接近。
 # 而且 Inno 的安装/卸载程序都要先把自己复制到 %TEMP% 再干活：在工作区里跑会被这个环境挡住，
 # 表现成"装了没反应 / 卸了没反应"，极易误判成包坏了（实测：同一个 exe 放 %TEMP% 跑就正常）。

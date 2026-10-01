@@ -117,10 +117,20 @@ def start_app(port, home, extra_args=None, log_path=None, use_jar=False):
     """
     args = [real_java(), '-Dfile.encoding=UTF-8', '-Duser.home=' + home]
     args += ['-jar', _private_jar()] if use_jar else ['-cp', classpath(), MAIN_CLASS]
-    args += ['--server.port=%d' % port,
-             '--lionbox.runtime.auto-download=false',
-             '--lionbox.runtime.prewarm.enabled=false']
-    args += list(extra_args or [])
+    defaults = ['--server.port=%d' % port,
+                '--lionbox.runtime.auto-download=false',
+                '--lionbox.runtime.prewarm.enabled=false',
+                # 【为什么默认关掉"改动人工审核"】出厂是开的（改文件先攒成待审、人点通过才落盘 ——
+                # 这是用户要的产品行为）。但绝大多数用例验的是"工具能不能把文件改对"，
+                # 开着审核文件根本不落盘，几十个用例会一起红 —— 那不是回归，是环境没配对。
+                # 审核流程自己有专门的用例（_check_context_review.py），它显式把这个开关打开。
+                '--lionbox.change-review.enabled=false']
+    # 调用方在 extra_args 里给了同一个键，就以调用方为准 —— 否则 Spring 会把两个值拼成
+    # "false,true" 然后启动失败（真实踩过：审核那个开关就是这么炸的）
+    extra = list(extra_args or [])
+    given = {a.split('=', 1)[0] for a in extra if a.startswith('--') and '=' in a}
+    args += [d for d in defaults if d.split('=', 1)[0] not in given]
+    args += extra
     log = open(log_path or os.path.join(home, 'app-%d.log' % port), 'w', encoding='utf-8', errors='replace')
     proc = subprocess.Popen(args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
     return proc, log

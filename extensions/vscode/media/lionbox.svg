@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- LionBox 侧栏图标：单色（VS Code 要求），线条风格 -->
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 狮子头轮廓 -->
+    <circle cx="12" cy="12" r="7.2"/>
+    <!-- 鬃毛 -->
+    <path d="M12 3.2v2.2M12 18.6v2.2M3.2 12h2.2M18.6 12h2.2M5.7 5.7l1.6 1.6M16.7 16.7l1.6 1.6M18.3 5.7l-1.6 1.6M7.3 16.7l-1.6 1.6"/>
+    <!-- 眼睛与嘴 -->
+    <circle cx="9.6" cy="11" r="0.9" fill="currentColor" stroke="none"/>
+    <circle cx="14.4" cy="11" r="0.9" fill="currentColor" stroke="none"/>
+    <path d="M12 13.2v1.4M10.3 15.3c.5.5 1 .7 1.7.7s1.2-.2 1.7-.7"/>
+  </g>
+</svg>

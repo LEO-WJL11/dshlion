@@ -24,10 +24,13 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 版本号做成参数：以后每版都用同一条命令，不用再复制脚本
+FROM = sys.argv[sys.argv.index('--from') + 1] if '--from' in sys.argv else '1.5.1'
+TO = sys.argv[sys.argv.index('--to') + 1] if '--to' in sys.argv else '1.5.2'
 SRC = os.path.join(ROOT, 'extensions', 'jetbrains', 'build', 'distributions',
-                   'lionbox-jetbrains-1.5.1.zip')
-OUT = os.path.join(ROOT, 'installer', 'release', 'LionBox-JetBrains-1.5.2.zip')
-OLD, NEW = '1.5.1', '1.5.2'
+                   'lionbox-jetbrains-%s.zip' % FROM)
+OUT = os.path.join(ROOT, 'installer', 'release', 'LionBox-JetBrains-%s.zip' % TO)
+OLD, NEW = FROM, TO
 OLD_JAR = 'lionbox-jetbrains/lib/lionbox-jetbrains-%s.jar' % OLD
 NEW_JAR = 'lionbox-jetbrains/lib/lionbox-jetbrains-%s.jar' % NEW
 

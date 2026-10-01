@@ -119,7 +119,7 @@
 ;         ⑤ 新增功能回归套件 _check_plugin_extras.py（20 条断言）：派子智能体、层级/并发上限、
 ;            团队分头干活、审查 DENY/ALLOW、自动化到点投递、轮次上限、终端限制、整组开关，全过；
 ;         ⑥ 37 个回归套件全绿。要求逐条对照见 docs/插件要求对照.md
-#define AppVersion     "1.5.2"
+#define AppVersion     "1.5.3"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 

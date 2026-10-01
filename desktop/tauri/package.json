@@ -1,7 +1,7 @@
 {
   "name": "lionbox-desktop",
   "private": true,
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "LionBox 桌面版：Tauri 2 套壳本地 WebUI（不带自己的浏览器，所以只有几 MB）",
   "license": "MIT",
   "scripts": {

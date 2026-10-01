@@ -1,5 +1,7 @@
 package com.lioncode.core.plugin.tool.file;
 
+import com.lioncode.core.agent.change.ChangeReview;
+
 import com.lioncode.core.plugin.tool.AbstractToolPlugin;
 import com.lioncode.core.plugin.tool.ToolResult;
 import org.slf4j.Logger;
@@ -18,6 +20,13 @@ import java.util.Map;
 public class FileDeleteTool extends AbstractToolPlugin {
 
     private static final Logger log = LoggerFactory.getLogger(FileDeleteTool.class);
+
+    /** 改动人工审核闸门：开着的话，改文件先攒成待审改动，人点了通过才落盘 */
+    private final ChangeReview changeReview;
+
+    public FileDeleteTool(ChangeReview changeReview) {
+        this.changeReview = changeReview;
+    }
 
     @Override
     public String getId() { return "tool.file.delete"; }
@@ -105,6 +114,11 @@ public class FileDeleteTool extends AbstractToolPlugin {
                         return error("目录不为空: " + path
                             + "（要连内容一起删就加 recursive=true；只是想删它里面的文件就先 delete_file 那些文件）");
                     }
+                }
+                java.util.Optional<ToolResult> gate = changeReview.intercept(
+                    getName(), path, Files.isRegularFile(target) ? readTextFile(target) : null, null);
+                if (gate.isPresent()) {
+                    return gate.get();
                 }
                 Files.delete(target);
             } else {

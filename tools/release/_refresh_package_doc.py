@@ -14,7 +14,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REL = os.path.join(ROOT, 'installer', 'release')
 DOC = os.path.join(ROOT, 'docs', '安装包清单.md')
-VER = '1.5.2'
+VER = sys.argv[1] if len(sys.argv) > 1 else '1.5.3'
 
 FILES = [
     ('LionBox-Setup-%s.exe' % VER, 'WebUI 版主程序：后端 + WebUI + 本地模型运行时 + 内置技能，装完从开始菜单/桌面启动（浏览器打开界面）'),

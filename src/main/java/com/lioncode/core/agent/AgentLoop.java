@@ -53,6 +53,8 @@ public class AgentLoop {
     private final ApprovalPolicy approvalPolicy;
     private final com.lioncode.core.sound.SoundNotifier soundNotifier;
     private final com.lioncode.model.config.AppConfigStore configStore;
+    /** 上下文窗口预算：默认 16K，Agent 可以用 context_window 工具临时调大再调回来 */
+    private final ContextBudget contextBudget;
 
     /** 每个会话的系统提示词缓存 */
     private final Map<String, String> systemPromptCache = new ConcurrentHashMap<>();
@@ -69,7 +71,8 @@ public class AgentLoop {
                      com.lioncode.core.workspace.WorkspaceManager workspaceManager,
                      ApprovalPolicy approvalPolicy,
                      com.lioncode.core.sound.SoundNotifier soundNotifier,
-                     com.lioncode.model.config.AppConfigStore configStore) {
+                     com.lioncode.model.config.AppConfigStore configStore,
+                     ContextBudget contextBudget) {
         this.eventStore = eventStore;
         this.pluginRegistry = pluginRegistry;
         this.conversationHistory = conversationHistory;
@@ -80,6 +83,7 @@ public class AgentLoop {
         this.approvalPolicy = approvalPolicy;
         this.soundNotifier = soundNotifier;
         this.configStore = configStore;
+        this.contextBudget = contextBudget;
     }
 
     /**
@@ -1207,6 +1211,13 @@ public class AgentLoop {
         prompt.append("## 必须用工具的情形\n");
         prompt.append("读/写/改/删文件、执行命令、看目录、搜内容、Git 操作、查系统信息 —— 一律调工具，不许只给建议。\n");
 
+        // 上下文经济约束：只在"模型真的有这两个工具"时才写进去 ——
+        // 用户在设置里把插件关掉后，提示词里就不该再出现它的用法（否则模型会去调一个不存在的工具）。
+        if (tools.stream().anyMatch(t -> "context_window".equals(t.getName()))
+                || tools.stream().anyMatch(t -> "context_prune".equals(t.getName()))) {
+            prompt.append("\n").append(CONTEXT_ECONOMY).append("\n");
+        }
+
         // 插件 SPI：追加段落（技能目录让模型自己挑技能、插件清单、团队智能体说明等）。
         // 放在最后：这些是"可选能力"，不能挤掉前面的硬性格式约定（模型只看前几屏）。
         for (String section : com.lioncode.core.agent.spi.AgentSpi
@@ -1272,6 +1283,9 @@ public class AgentLoop {
         Map.entry("download_file", "把 URL 上的文件下载到本地"),
         Map.entry("translate", "翻译文本"),
         Map.entry("working_directory", "查看或切换当前工作目录"),
+        // ---- 上下文经济：这两个工具是"省钱"用的，约束写在下面 CONTEXT_ECONOMY 那一节里 ----
+        Map.entry("context_window", "调整本会话的上下文窗口（默认 16K）。只有 16K 真装不下时才调大，做完立刻调回 16384"),
+        Map.entry("context_prune", "删掉本会话前面那些已经没用的历史消息，只保留最近几条（真删）。方案定了、探查过程没用了就用它"),
         Map.entry("git_status", "查看 Git 仓库状态"),
         Map.entry("git_commit", "暂存并提交改动"),
         Map.entry("git_log", "查看提交历史"),
@@ -1352,6 +1366,28 @@ public class AgentLoop {
         - “查资料 / 网上搜” → web_search；“抓某个网址” → fetch_url
         - “把某段话翻译成英文/中文” → translate（不要自己翻译，用工具）
         - “算一下/转换/解析”这类纯计算，先看有没有对应工具，有就用，别自己心算
+        """;
+
+    /**
+     * 上下文经济：给模型的硬约束（用户要求"写段提示词约束 AI 这个工具怎么用"）。
+     *
+     * <p>为什么值得占提示词的位置：本机模型 256K 全开时，**每一轮都要把整个前缀重新预填充**，
+     * 窗口就是钱。默认收到 16K 之后，模型必须知道三件事 ——
+     * ① 平时别碰窗口；② 真的不够才加、而且加完要还；③ 前面没用的历史可以自己删。</p>
+     */
+    private static final String CONTEXT_ECONOMY = """
+        【上下文怎么用才省钱】默认窗口是 16K，这是刻意的：窗口越大，每一轮要重算的前缀越多。
+        所以按下面的规矩来，别把窗口当成越大越好：
+        1. 默认什么都别做。16K 够干绝大多数活，不要一上来就调窗口。
+        2. 只有在**真的装不下**的时候才调大：比如要通读一个几千行的文件、或者同时盯好几个模块、
+          或者已经压缩过两次还在原地打转。调的时候给一句 reason 说明为什么。
+        3. **用完立刻还**：那件事做完，马上把窗口调回 16384（context_window，tokens=16384）。
+           忘了还，用户后面每一句话都要多花这笔预填充的钱。
+        4. 省上下文的优先顺序（从便宜到贵）：
+           ① 只读你要改的那一段（read_file 带行号范围 / head_tail_file），别整文件读；
+           ② 探查完就裁剪：方案定了、前面翻文件试错的过程没用了，用 context_prune 保留最近几条；
+           ③ 还不够，最后才考虑调大窗口。
+        5. 裁剪前想先看看会删掉什么，用 context_prune 的 dry_run=true。
         """;
 
     /**
@@ -1460,8 +1496,18 @@ public class AgentLoop {
     /** 模型窗口查询结果缓存（别每轮都去问一遍适配器）。 */
     private volatile int cachedModelContextTokens = -1;
 
-    /** 本次实际生效的上下文预算（token）。 */
-    private int effectiveContextLimit(String model) {
+    /**
+     * 本次实际生效的上下文预算（token）。
+     *
+     * <p>顺序：**会话自己调过的窗口**（Agent 用 context_window 工具设的）→
+     * 全局默认（{@code lionbox.agent.context-limit-tokens}，出厂 16K，为的是省预填充）→
+     * 模型窗口的 75%。前两层都是 0 才走到第三层。</p>
+     */
+    private int effectiveContextLimit(String model, String sessionId) {
+        int budgeted = contextBudget.limitFor(sessionId);
+        if (budgeted > 0) {
+            return budgeted;
+        }
         if (contextLimitTokens > 0) {
             return contextLimitTokens;
         }
@@ -1497,7 +1543,7 @@ public class AgentLoop {
      */
     private void maybeCompressContext(String sessionId, List<ChatMessage> messages, String model) {
         try {
-            int limit = effectiveContextLimit(model);
+            int limit = effectiveContextLimit(model, sessionId);
             int keep = Math.max(4, contextKeepRecent);
             ContextCompressor.Result r = ContextCompressor.fit(messages, limit, keep);
             if (!r.compressed()) {

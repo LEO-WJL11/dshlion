@@ -1,5 +1,7 @@
 package com.lioncode.core.plugin.tool.file;
 
+import com.lioncode.core.agent.change.ChangeReview;
+
 import com.lioncode.core.plugin.tool.AbstractToolPlugin;
 import com.lioncode.core.plugin.tool.ToolResult;
 import org.springframework.stereotype.Component;
@@ -12,6 +14,13 @@ import java.util.Map;
  */
 @Component
 public class FileTouchTool extends AbstractToolPlugin {
+
+    /** 改动人工审核闸门：开着的活，改文件先攒成待审改动，人点了通过才落盘 */
+    private final ChangeReview changeReview;
+
+    public FileTouchTool(ChangeReview changeReview) {
+        this.changeReview = changeReview;
+    }
 
     @Override
     public String getId() { return "tool.file.touch"; }
@@ -35,6 +44,11 @@ public class FileTouchTool extends AbstractToolPlugin {
             String path = resolvePath(getRequiredStringArg(arguments, "path"));
             Path filePath = Path.of(path);
             if (filePath.getParent() != null) Files.createDirectories(filePath.getParent());
+            java.util.Optional<ToolResult> gate = changeReview.intercept(
+                getName(), path, null, "");
+            if (gate.isPresent()) {
+                return gate.get();
+            }
             Files.createFile(filePath);
             return success("文件已创建: " + path);
         } catch (FileAlreadyExistsException e) {

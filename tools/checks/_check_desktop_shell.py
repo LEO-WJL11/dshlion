@@ -26,7 +26,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXE = os.path.join(ROOT, 'desktop', 'tauri', 'src-tauri', 'target', 'release',
                    'lionbox-desktop.exe')
-SETUP = os.path.join(ROOT, 'installer', 'release', 'LionBox-Desktop-1.5.2-Setup.exe')
+SETUP = os.path.join(ROOT, 'installer', 'release', 'LionBox-Desktop-1.5.3-Setup.exe')
 SELFTEST_OUT = os.path.join(os.environ.get('TEMP', '.'), '_lionbox_shell_selftest.json')
 
 try:

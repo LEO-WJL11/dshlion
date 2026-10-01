@@ -1,6 +1,7 @@
 package com.lioncode.core.plugin;
 
 import com.lioncode.core.plugin.automation.AutomationPlugin;
+import com.lioncode.core.plugin.change.ChangeReviewPlugin;
 import com.lioncode.core.plugin.review.ApprovalReviewPlugin;
 import com.lioncode.core.plugin.team.AgentTeamPlugin;
 import com.lioncode.core.plugin.team.SubAgentPlugin;
@@ -39,6 +40,7 @@ public class PluginBootstrap implements ApplicationRunner {
     private final AgentTeamPlugin agentTeamPlugin;
     private final ApprovalReviewPlugin approvalReviewPlugin;
     private final AutomationPlugin automationPlugin;
+    private final ChangeReviewPlugin changeReviewPlugin;
 
     public PluginBootstrap(PluginRegistry pluginRegistry,
                            TerminalPlugin terminalPlugin,
@@ -46,7 +48,8 @@ public class PluginBootstrap implements ApplicationRunner {
                            SubAgentPlugin subAgentPlugin,
                            AgentTeamPlugin agentTeamPlugin,
                            ApprovalReviewPlugin approvalReviewPlugin,
-                           AutomationPlugin automationPlugin) {
+                           AutomationPlugin automationPlugin,
+                           ChangeReviewPlugin changeReviewPlugin) {
         this.pluginRegistry = pluginRegistry;
         this.terminalPlugin = terminalPlugin;
         this.agentLoopPlugin = agentLoopPlugin;
@@ -54,6 +57,7 @@ public class PluginBootstrap implements ApplicationRunner {
         this.agentTeamPlugin = agentTeamPlugin;
         this.approvalReviewPlugin = approvalReviewPlugin;
         this.automationPlugin = automationPlugin;
+        this.changeReviewPlugin = changeReviewPlugin;
     }
 
     @Override
@@ -62,7 +66,8 @@ public class PluginBootstrap implements ApplicationRunner {
         // 不能让其余插件陪葬 —— 插件系统的第一原则是"坏一块不能全废"。
         List<Plugin> systemPlugins = List.of(
             terminalPlugin, agentLoopPlugin, subAgentPlugin,
-            agentTeamPlugin, approvalReviewPlugin, automationPlugin);
+            agentTeamPlugin, approvalReviewPlugin, automationPlugin,
+            changeReviewPlugin);
         int ok = 0;
         for (Plugin p : systemPlugins) {
             try {

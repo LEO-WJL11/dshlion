@@ -117,6 +117,20 @@ check('原来的设置页签都还在（模型来源 / 音效 / llama）',
       all(x in html for x in ['setTabProviders', 'setTabNotification', 'setTabLlama']))
 check('★ @ 补全的候选浮层元素在（mentionPopup）', 'id="mentionPopup"' in html and 'mention-popup' in html)
 check('★ 引用小标签的容器在（refBar）', 'id="refBar"' in html and 'ref-chip' in html)
+# ---- 改动人工审核 + 上下文窗口（1.5.3 新增） ----
+# 出厂默认"改文件先待审"，所以界面上必须点得到「通过 / 打回」——
+# 只有后端有接口、界面没按钮的话，用 WebUI 的人会看到"AI 说写好了、文件却没变"的死路。
+check('★ 待审改动的容器在（changeBox）', 'id="changeBox"' in html and 'change-box' in html)
+check('★ 通过 / 打回按钮的实现在（approveChange / rejectChange）',
+      'approveChange: function' in app_js and 'rejectChange: function' in app_js
+      and '/approve' in app_js and '/reject' in app_js)
+check('★ 待审改动挂进了现成的轮询（不另开定时器）',
+      'self.refreshChanges();' in app_js and 'self.pollEvents();' in app_js)
+check('★ diff 上了色且用的是主题变量（不许硬编码色）',
+      ".change-box .add { color: var(--ok); }" in html and 'diffHtml: function' in app_js)
+check('★ 上下文窗口指示在（ctxChip）+ 能手动改',
+      'id="ctxChip"' in html and 'promptContextWindow: function' in app_js
+      and "'/api/context'" in app_js)
 
 # ---- 1.4 前端确实调了这些接口 ----
 def has(pattern):

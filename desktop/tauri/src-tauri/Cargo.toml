@@ -1,6 +1,6 @@
 [package]
 name = "lionbox-desktop"
-version = "1.5.2"
+version = "1.5.3"
 description = "LionBox desktop shell (Tauri 2 wrapping the local WebUI)"
 authors = ["LionCode"]
 edition = "2021"
