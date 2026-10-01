@@ -158,6 +158,9 @@ proc = subprocess.Popen([real_java(), '-Dfile.encoding=UTF-8', '-Duser.home=' + 
                          '--lion.event.store-path=' + EVENTS_DIR,
                          '--lion.plugin.scan-path=' + os.path.join(TMP, 'data', 'plugins'),
                          '--lionbox.runtime.auto-download=false',
+                         # 关掉改动人工审核：这些用例验的是"工具能不能把文件改对"，开着审核
+                         # 文件根本不会落盘（出厂默认是开的，见 tools/bench/_app.py 的说明）
+                         '--lionbox.change-review.enabled=false',
                          '--lionbox.runtime.prewarm.enabled=false'],
                         cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
 try:

@@ -119,7 +119,7 @@
 ;         ⑤ 新增功能回归套件 _check_plugin_extras.py（20 条断言）：派子智能体、层级/并发上限、
 ;            团队分头干活、审查 DENY/ALLOW、自动化到点投递、轮次上限、终端限制、整组开关，全过；
 ;         ⑥ 37 个回归套件全绿。要求逐条对照见 docs/插件要求对照.md
-#define AppVersion     "1.5.3"
+#define AppVersion     "1.5.4"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
@@ -196,20 +196,42 @@ Source: "..\dist\runtime-jre\*";     DestDir: "{app}\runtime-jre";     Flags: ig
 ; 这样安装包从 5.2GB 降到 ~100MB，也避免把权重塞进每个用户的安装目录。
 ; 需要离线部署的话，把权重预先放到 {app}\ 或 {app}\models\ 即可，程序优先用本地现成的。
 
+; ---- VS Code 插件（1.5.4 起打进同一个包） ----
+; 用户要的是"就一个包"：装完 LionBox，VS Code 右侧栏的 Agent 面板也就装好了。
+; 插件包同时留在 {app}\vscode-extension\ 里，没自动装上（比如没装 VS Code）也能手动装。
+Source: "release\LionBox-VSCode-{#AppVersion}.vsix"; DestDir: "{app}\vscode-extension"; DestName: "LionBox-VSCode.vsix"; Flags: ignoreversion
+Source: "install-vscode-ext.bat"; DestDir: "{app}"; Flags: ignoreversion
+
 [Icons]
 Name: "{group}\{#AppNameCN}";           Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 Name: "{group}\停止 LionBox";            Filename: "{app}\停止LionBox.bat"; WorkingDir: "{app}"
+Name: "{group}\为 VS Code 安装插件";      Filename: "{app}\install-vscode-ext.bat"; WorkingDir: "{app}"
 Name: "{group}\使用说明";                Filename: "{app}\使用说明.md"; WorkingDir: "{app}"
 Name: "{group}\卸载 {#AppNameCN}";       Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppNameCN}";      Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+; 装完自动给 VS Code 装上 LionBox 插件（右侧栏的 Agent 面板）。
+; runhidden + 不写 skipifsilent：静默安装也要装，否则"一个包"就名不副实了。
+; 脚本自己找 code 命令行，找不到就只在 vscode-extension\安装结果.txt 里留一句说明，绝不失败。
+;
+; 【必须经 cmd.exe 跑】Inno 的 [Run] 是用 CreateProcess 启动程序的，而 .bat 不是可执行映像，
+; 直接写 Filename: "{app}\xxx.bat" 会**静默失败**（静默安装下连报错都看不见）——
+; 第一版就是这么"装完了但插件没装上、什么都不提示"的。所以统一走 {cmd} /c。
+Filename: "{cmd}"; Parameters: "/c """"{app}\install-vscode-ext.bat"""""; Flags: runhidden waituntilterminated
 ; 安装完成后由用户选择是否立即启动
 Filename: "{app}\{#AppExeName}"; Description: "立即启动 LionBox"; Flags: postinstall nowait skipifsilent shellexec
+
+[UninstallRun]
+; 卸载时也把 VS Code 插件卸掉，别在编辑器里留一个连不上后端的空面板
+Filename: "{cmd}"; Parameters: "/c call ""{app}\install-vscode-ext.bat"" uninstall"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 ; 仅清理运行时生成的日志；用户数据（会话/工作区/配置）保留
 Type: filesandordirs; Name: "{app}\logs"
+; VS Code 插件目录：里面除了我们装的 vsix，还有安装脚本写的 install-result.txt。
+; 后者不是 Inno 装的，会把这个目录撑住 —— 实测卸载后留一个空壳，所以显式删掉。
+Type: filesandordirs; Name: "{app}\vscode-extension"
 
 [Code]
 // 安装前检查磁盘空间（程序 ~100MB；模型权重是首次使用时另外下载的 8.9GB）

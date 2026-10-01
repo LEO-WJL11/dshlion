@@ -96,6 +96,9 @@ def start_app():
                              '--server.port=%d' % APP_PORT,
                              '--lion.workspace.default-path=' + WSROOT,
                              '--lionbox.runtime.auto-download=false',
+                             # 关掉改动人工审核：这些用例验的是"工具能不能把文件改对"，开着审核
+                             # 文件根本不会落盘（出厂默认是开的，见 tools/bench/_app.py 的说明）
+                             '--lionbox.change-review.enabled=false',
                              '--lionbox.runtime.prewarm.enabled=false'],
                             cwd=TMP, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(90):

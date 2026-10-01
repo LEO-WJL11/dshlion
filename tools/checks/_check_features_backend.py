@@ -118,6 +118,9 @@ def start_app():
                              # 之后那些文件没了 —— 测试不该依赖那 24 GB，这里把门槛调到 1 MB，
                              # 并在下面自己造一个小文件。
                              '--lionbox.runtime.min-model-bytes=1000000',
+                             # 关掉改动人工审核：这些用例验的是"工具能不能把文件改对"，开着审核
+                             # 文件根本不会落盘（出厂默认是开的，见 tools/bench/_app.py 的说明）
+                             '--lionbox.change-review.enabled=false',
                              '--lionbox.runtime.prewarm.enabled=false'],
                             cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(90):

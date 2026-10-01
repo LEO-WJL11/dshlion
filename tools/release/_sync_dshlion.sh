@@ -74,6 +74,26 @@ for f in "${REMOVED[@]}"; do
     count_rm=$((count_rm + 1))
   fi
 done
+
+# 通用规则：公开树里有、但**开发仓库里已经没有**的文件，一律从公开树删掉。
+# 【为什么需要这条】上面的 REMOVED 是手写名单，只有"以前删过的东西"才在里面；
+# 每删一批文件（比如 1.5.4 删掉桌面版 desktop/tauri 和 JetBrains 插件 extensions/jetbrains）
+# 就得回去补名单，补漏了公开仓库就会**一直留着一堆已经废弃的源码**。
+# 这条规则把它变成机械动作：以开发仓库为准，多出来的就是陈旧文件。
+# 例外只有公开仓库专有的文档（使用教程.md），那是故意只放 GitHub 的。
+KEEP_PUBLIC_ONLY="使用教程.md"
+while IFS= read -r f; do
+  case "$f" in
+    installer/release/*) continue ;;
+  esac
+  [ "$f" = "$KEEP_PUBLIC_ONLY" ] && continue
+  if [ ! -e "$f" ]; then
+    git rm --cached -q "$f" 2>/dev/null || true
+    echo "  公开树里的陈旧文件已删: $f"
+    count_rm=$((count_rm + 1))
+  fi
+done < <(git -c core.quotepath=false ls-tree -r --name-only dshlion/main)
+
 echo "  更新 $count_add 个、删掉 $count_rm 个"
 
 # ---- 2) 本地有、公开树里还没有的文件：**全部**加进去 ----

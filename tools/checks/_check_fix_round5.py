@@ -166,6 +166,11 @@ print('=' * 72)
 print('第 5 跑的 5 个真 bug')
 print('=' * 72)
 kill_port(APP_PORT)
+# 【为什么先 attrib -R】这个用例会造只读文件（模拟 .git 里那种），而只读文件让
+# shutil.rmtree 删不掉目录 —— 带 ignore_errors=True 时它**静默失败**，于是上一轮的
+# readonly_dir 留在临时目录里，下一轮 makedirs(exist_ok=True) 复用它、写文件直接
+# PermissionError（整份用例在第一行 fixture 就崩，看不出跟被测代码有什么关系）。
+os.system('attrib -R -S -H "%s\\*" /S /D >nul 2>&1' % TMP)
 shutil.rmtree(TMP, ignore_errors=True)
 os.makedirs(os.path.join(HOME, '.lioncode'), exist_ok=True)
 os.makedirs(WS, exist_ok=True)
@@ -197,6 +202,9 @@ log = open(LOG, 'w', encoding='utf-8', errors='replace')
 proc = subprocess.Popen([real_java(), '-Dfile.encoding=UTF-8', '-Duser.home=' + HOME, '-jar', JAR,
                          '--server.port=%d' % APP_PORT,
                          '--lionbox.runtime.auto-download=false',
+                         # 关掉改动人工审核：这些用例验的是"工具能不能把文件改对"，开着审核
+                         # 文件根本不会落盘（出厂默认是开的，见 tools/bench/_app.py 的说明）
+                         '--lionbox.change-review.enabled=false',
                          '--lionbox.runtime.prewarm.enabled=false'],
                         cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
 try:

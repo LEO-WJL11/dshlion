@@ -1,7 +1,5 @@
 package com.lioncode.core.agent.change;
 
-import com.lioncode.core.plugin.Plugin;
-import com.lioncode.core.plugin.PluginRegistry;
 import com.lioncode.core.plugin.PluginSettings;
 import com.lioncode.core.plugin.tool.ToolResult;
 import com.lioncode.core.session.ConversationHistory;
@@ -48,7 +46,6 @@ public class ChangeReview {
     public static final String PLUGIN_ID = "plugin.change-review";
 
     private final ConversationHistory history;
-    private final PluginRegistry pluginRegistry;
     private final PluginSettings settings;
 
     /** 出厂默认：开（用户要的就是"先审后用"） */
@@ -62,11 +59,9 @@ public class ChangeReview {
 
     private final AtomicInteger seq = new AtomicInteger();
 
-    public ChangeReview(ConversationHistory history, PluginRegistry pluginRegistry,
-                        PluginSettings settings,
+    public ChangeReview(ConversationHistory history, PluginSettings settings,
                         @Value("${lionbox.change-review.enabled:true}") boolean enabledByDefault) {
         this.history = history;
-        this.pluginRegistry = pluginRegistry;
         this.settings = settings;
         this.enabledByDefault = enabledByDefault;
         log.info("改动人工审核: {}", enabledByDefault ? "默认开启（改文件先待审）" : "默认关闭（直接落盘）");
@@ -75,16 +70,17 @@ public class ChangeReview {
     /**
      * 审核开着吗。
      *
-     * <p>判定顺序：用户在设置里点过的开关（插件开关，落盘、重启还在）→ 配置文件默认值。
-     * 插件没注册（比如被整个禁用了）也按默认值走。</p>
+     * <p>判定顺序：用户在设置里点过的插件开关（落盘、重启还在）→ 出厂默认值
+     * （配置项 {@code lionbox.change-review.enabled}，默认 true）。</p>
+     *
+     * <p>【踩过的坑】第一版写成"插件注册了就问插件自己的 isEnabledByDefault()"，
+     * 结果配置项那个开关**完全不起作用** —— 测试环境用
+     * {@code --lionbox.change-review.enabled=false} 关它，文件还是全被拦下来待审，
+     * 五个工具用例一起红。配置项必须就是"没人点过开关时用的默认值"，
+     * 插件注册与否都一样。</p>
      */
     public boolean enabled() {
-        Plugin p = pluginRegistry.getById(PLUGIN_ID).orElse(null);
-        if (p == null) {
-            // 插件没在注册表里：仍然尊重用户在设置里点过的开关
-            return settings.isEnabled(PLUGIN_ID, enabledByDefault);
-        }
-        return settings.isEnabled(p);
+        return settings.isEnabled(PLUGIN_ID, enabledByDefault);
     }
 
     /**

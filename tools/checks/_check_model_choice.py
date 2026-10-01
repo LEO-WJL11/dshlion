@@ -126,6 +126,9 @@ def start_app(extra=None):
             '-Dlionbox.home=' + APPDIR, '-jar', JAR,
             '--server.port=%d' % APP_PORT,
             '--lionbox.runtime.auto-download=false',
+            # 关掉改动人工审核：这些用例验的是"工具能不能把文件改对"，开着审核
+            # 文件根本不会落盘（出厂默认是开的，见 tools/bench/_app.py 的说明）
+            '--lionbox.change-review.enabled=false',
             '--lionbox.runtime.prewarm.enabled=false',
             '--lionbox.runtime.min-model-bytes=1000000',
             # 【坑】运行时端口必须换开：默认 8788 上跑着用户自己那台 LionBox 的
