@@ -44,6 +44,11 @@ REMOVED=(
   "docs/EasyEDA-自建符号API.md"
   "启动.bat"
   "lion-code-agent-harness-1.0.0-SNAPSHOT.jar"
+  # 2026-10-01：私有仓库里删掉、但公开树还留着的（同步脚本只更新"两边都有"的文件，
+  # 本地删了不会自动从公开树删 —— 所以凡是在私有仓库里删过的东西，都得补进这个名单）
+  "_desktopverify_home/bundle-copy.log.err"
+  "_desktopverify_home/installed.log.err"
+  "extensions/vscode/LionBox-1.5.0.vsix"
 )
 
 # ---- 1) 公开树里已有的文件：本地还在的就更新 ----
@@ -55,7 +60,10 @@ while IFS= read -r f; do
     installer/release/*) continue ;;
   esac
   if [ -e "$f" ]; then
-    git add -- "$f"
+    # -f 是必须的：公开树里可能存着被 .gitignore 挡住的路径（比如 extensions/vscode/.vscode/launch.json
+    # 就被 .vscode/ 规则挡着）。不带 -f 时 git add 会直接报错，而脚本是 set -e ——
+    # 整个同步会**静默中止**（这次就是：只打印了一行 ignored 提示，后面的删除/新增全没跑）。
+    git add -f -- "$f" 2>/dev/null || true
     count_add=$((count_add + 1))
   fi
 done < <(git -c core.quotepath=false ls-tree -r --name-only dshlion/main)
@@ -90,7 +98,7 @@ while IFS= read -r f; do
   esac
   if [ -e "$f" ] && ! git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
     # -f：tools/release/ 这类路径可能被 .gitignore 的规则挡着
-    git add -f -- "$f"
+    git add -f -- "$f" 2>/dev/null || true
     count_new=$((count_new + 1))
   fi
 done <<< "$DEV_FILES"
