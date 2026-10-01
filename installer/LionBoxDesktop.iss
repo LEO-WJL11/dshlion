@@ -13,7 +13,7 @@
 ; ---------------------------------------------------------------------------
 
 #define AppName        "LionBox 桌面版"
-#define AppVersion     "1.5.1"
+#define AppVersion     "1.5.2"
 #define AppPublisher   "LionCode"
 #define AppExeName     "LionBox.exe"
 

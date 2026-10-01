@@ -132,3 +132,5 @@ dist/skills/
 desktop/tauri/node_modules/
 desktop/tauri/src-tauri/target/
 desktop/tauri/src-tauri/gen/schemas/
+
+extensions/vscode/*.vsix

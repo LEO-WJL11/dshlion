@@ -88,10 +88,33 @@ check('★ 旧配色一个不剩（紫/深蓝/霓虹色全换掉）', not still,
 check('设置面板的内容容器在（settingsContent）', 'id="settingsContent"' in html)
 check('★ 设置里有「界面」页签（主题切换入口）',
       'id="setTabAppearance"' in html and "settingsTab(\\'appearance\\')" in html)
-check('★ 设置里有「插件」页签', 'id="setTabPlugins"' in html and "settingsTab(\\'plugins\\')" in html)
-check('★ 设置里有「技能」页签', 'id="setTabSkills"' in html and "settingsTab(\\'skills\\')" in html)
-check('原来的设置页签都还在（模型来源 / 审批 / 音效 / llama）',
-      all(x in html for x in ['setTabProviders', 'setTabApprovals', 'setTabNotification', 'setTabLlama']))
+# ---- 设置页签合并：插件 / 插件参数 / 技能 / 审批策略 → 一个「插件管理」 ----
+# 用户的原话："如果设置里面有重复的设置，给它干掉，全部缩进插件管理。"
+# 所以这里反过来断言：**那三个旧页签必须不存在**，而且老页签名要还能落到插件管理
+# （旧链接、老记法点进来不能是空页）。
+check('★ 设置里有「插件管理」页签（插件唯一入口）',
+      'id="setTabPlugins"' in html and "settingsTab(\\'plugins\\')" in html
+      and '插件管理' in html)
+check('★ 被合并掉的三个页签不再存在（插件参数 / 技能 / 审批策略）',
+      all(x not in html for x in ['setTabPluginParams', 'setTabSkills', 'setTabApprovals']),
+      '旧页签按钮还有：' + ','.join([x for x in ['setTabPluginParams', 'setTabSkills', 'setTabApprovals'] if x in html]))
+check('★ 老页签名一律落到插件管理（不会点出空页）',
+      "'pluginparams':'plugins'" in app_js and "'skills':'plugins'" in app_js
+      and "'approvals':'plugins'" in app_js)
+check('★ 每个插件行下面挂自己的参数块（pluginParamsFor + pluginInlineHtml）',
+      'pluginParamsFor: function' in app_js and 'pluginInlineHtml: function' in app_js)
+check('★ 六个参数块按插件分发（终端/大循环/子智能体/审查/团队/自动化）',
+      all(("which === '%s'" % k) in app_js for k in
+          ['terminal', 'loop', 'subagent', 'review', 'team', 'automation']))
+check('★ 技能与审批策略的渲染进了插件页（不再有独立页签函数）',
+      'skillsInlineHtml: function' in app_js and 'approvalsInlineHtml: function' in app_js
+      and 'renderSkillsTab: function' not in app_js
+      and 'renderApprovalsTab: function' not in app_js
+      and 'renderPluginParamsTab: function' not in app_js)
+check('★ 重画插件页时保留展开状态（加成员/加任务不会把折叠块合上）',
+      'rerenderPlugins: function' in app_js and 'plug-inline' in app_js)
+check('原来的设置页签都还在（模型来源 / 音效 / llama）',
+      all(x in html for x in ['setTabProviders', 'setTabNotification', 'setTabLlama']))
 check('★ @ 补全的候选浮层元素在（mentionPopup）', 'id="mentionPopup"' in html and 'mention-popup' in html)
 check('★ 引用小标签的容器在（refBar）', 'id="refBar"' in html and 'ref-chip' in html)
 
@@ -462,7 +485,9 @@ TESTS = r'''
     return { ok: true, status: 200, json: () => Promise.resolve({ ok: true }) };
   };
   App.renderPluginsTab();
-  for (var s = 0; s < 4; s++) { await tick(); }
+  // 插件管理一页要拉 6 个接口（插件 / 参数 / 技能 / 团队 / 自动化 / 审批策略），
+  // 每多一条 Promise 链就多几拍微任务 —— 原来只等 4 拍，合并后不够了。
+  for (var s = 0; s < 16; s++) { await tick(); }
   var pv = document.getElementById('settingsContent').innerHTML;
   ok(pv.indexOf('插件（2）') >= 0, '插件面板列出了 2 个插件');
   ok(pv.indexOf('工具（1）') >= 0 && pv.indexOf('技能（1）') >= 0,
@@ -543,15 +568,15 @@ TESTS = r'''
     return { ok: false, status: 404, json: () => Promise.resolve({ timestamp: 1, status: 404, error: 'Not Found' }) };
   };
   var threw2 = null;
-  try { App.renderPluginsTab(); for (var t5 = 0; t5 < 4; t5++) { await tick(); } } catch (e) { threw2 = e; }
+  try { App.renderPluginsTab(); for (var t5 = 0; t5 < 14; t5++) { await tick(); } } catch (e) { threw2 = e; }
   ok(threw2 === null, '插件接口 404 时渲染不抛异常');
   ok(document.getElementById('settingsContent').innerHTML.indexOf('该功能的后端还没就绪') >= 0,
      '★ 插件面板显示「该功能的后端还没就绪」而不是整页报错');
 
-  // ==================== 4. 技能面板 ====================
-  console.log('--- 设置 → 技能 ---');
+  // ==================== 4. 技能（现在在插件管理的 SKILL 分组里） ====================
+  console.log('--- 设置 → 插件管理 → 技能 ---');
   App.sessionId = 'sess-1';
-  App.currentSettingsTab = 'skills';
+  App.currentSettingsTab = 'plugins';
   globalThis.__fetchHandler = function(u, opt) {
     if (u.indexOf('/api/skills/active?sessionId=') === 0) {
       return { ok: true, status: 200, json: () => Promise.resolve({ ok: true, skills: ['pdf'] }) };
@@ -566,11 +591,11 @@ TESTS = r'''
     }
     return { ok: true, status: 200, json: () => Promise.resolve({ ok: true }) };
   };
-  App.renderSkillsTab();
-  for (var v = 0; v < 12; v++) { await tick(); }
+  try { App.renderPluginsTab(); } catch (e) { threw2 = e; }
+  for (var v = 0; v < 16; v++) { await tick(); }
   var sv = document.getElementById('settingsContent').innerHTML;
-  ok(sv.indexOf('技能（2）') >= 0 && sv.indexOf('读 PDF') >= 0 && sv.indexOf('表格') >= 0,
-     '★ 技能列表出来了（名称 + 描述）');
+  ok(sv.indexOf('读 PDF') >= 0 && sv.indexOf('表格') >= 0,
+     '★ 技能列表在插件管理里出来了（名称 + 描述）');
   ok(sv.indexOf('内置') >= 0 && sv.indexOf('外置') >= 0, '技能也标了来源');
   ok(sv.indexOf('把 PDF 读成文字') >= 0, '显示了技能的 description');
   ok(sv.indexOf('App.toggleSkill(') >= 0, '★ 每个技能一个 enable/disable 开关');
@@ -579,6 +604,8 @@ TESTS = r'''
      '★ 当前会话已指定的技能显示成标签（pdf）', pinnedHtml.slice(0, 120));
   ok(pinnedHtml.indexOf('App.unpinSkill(') >= 0, '已指定的技能标签可以点 × 移除', pinnedHtml.slice(0, 120));
   ok(sv.indexOf('App.pinSkill(') >= 0, '★ 未指定的技能有「指定使用」按钮');
+  ok(sv.indexOf('插件管理') >= 0 || sv.indexOf('skillsInlineBox') >= 0,
+     '★ 技能与插件开关在同一页里（不再有独立技能页签）');
 
   // 指定使用 → POST /api/skills/active
   globalThis.__fetchLog = [];
@@ -609,9 +636,9 @@ TESTS = r'''
     return { ok: false, status: 500, json: () => Promise.resolve({ status: 500, error: 'Internal Server Error' }) };
   };
   var threw3 = null;
-  try { App.renderSkillsTab(); for (var w2 = 0; w2 < 4; w2++) { await tick(); } } catch (e) { threw3 = e; }
+  try { App.renderPluginsTab(); for (var w2 = 0; w2 < 14; w2++) { await tick(); } } catch (e) { threw3 = e; }
   ok(threw3 === null && document.getElementById('settingsContent').innerHTML.indexOf('该功能的后端还没就绪') >= 0,
-     '★ 技能接口挂了 → 面板说「还没就绪」，不抛异常');
+     '★ 技能接口挂了 → 插件管理说「还没就绪」，不抛异常');
 
   // ==================== 5. 老契约兼容 ====================
   console.log('--- 兼容旧返回格式（success + data 数组）---');
@@ -625,10 +652,10 @@ TESTS = r'''
     return { ok: true, status: 200, json: () => Promise.resolve({ success: true, data: [] }) };
   };
   App.renderPluginsTab();
-  for (var z = 0; z < 4; z++) { await tick(); }
+  for (var z = 0; z < 16; z++) { await tick(); }
   var oldHtml = document.getElementById('settingsContent').innerHTML;
   ok(oldHtml.indexOf('old_tool') >= 0 && oldHtml.indexOf('工具（1）') >= 0,
-     '★ 后端还是老的 {success,data:[...]} 格式时照样能列出插件');
+     '★ 后端还是老的 {success,data:[...]} 格式时照样能列出插件', oldHtml.slice(0, 160));
 
   console.log('');
   if (__fails.length) {

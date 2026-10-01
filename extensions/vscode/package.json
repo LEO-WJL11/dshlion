@@ -2,7 +2,7 @@
   "name": "lionbox",
   "displayName": "LionBox",
   "description": "在 VS Code 内打开 LionBox (Lion-Code Agent Harness) 的本地 Web UI（内嵌 http://127.0.0.1:8080）",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "publisher": "lioncode",
   "license": "MIT",
   "repository": {
