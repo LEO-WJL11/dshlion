@@ -100,7 +100,8 @@ llama-server.exe -m lion-merged-Q8_0.gguf \
   点「通过」才真正落盘，点「打回」它按你的理由重写；
 - **上下文自己管**：`context_window`（不够时调大、干完调回）和 `context_prune`（删掉没用的历史）。
 
-**想开箱即用**：下载 `LionBox-Setup-*.exe`（仓库 `installer/release/` 或 Releases），
+**想开箱即用**：下载 `LionBox-Setup-*.exe` —— 在 LionBox 仓库的
+**`installer/release/`** 文件夹里（[直接打开](https://github.com/LEO-WJL11/dshlion/tree/main/installer/release)），
 装完打开 VS Code，右边最右那一栏就是它 —— 权重会自动下载，不需要配环境、不需要注册。
 
 ---

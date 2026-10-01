@@ -13,15 +13,61 @@
 
 ---
 
-## 先说清楚这个项目不吹什么
+## ⬇️ 下载与安装（三分钟）
 
-旧的 README 里写着"超越某某"、"HumanEval 70% vs 50%"这类话。**那些删了** ——
-没法验证的对比没有信息量。下面每一条都能在仓库里找到对应的代码或用例；
-**做不到的事写在最后的「已知限制」里**，而不是藏起来。
+**去哪里下**：这个仓库的 **`installer/release/`** 文件夹里，就一个文件：
+
+> ### 👉 [`installer/release/LionBox-Setup-1.5.4.exe`](https://github.com/LEO-WJL11/dshlion/blob/main/installer/release/LionBox-Setup-1.5.4.exe)
+
+打开那个页面后点右上角的 **Download**（或直接点这个直链：
+[1.5.4 直链下载](https://github.com/LEO-WJL11/dshlion/raw/main/installer/release/LionBox-Setup-1.5.4.exe)），
+大小 **74 MB**。仓库里没有别的东西需要下 —— 模型权重不在这里，首次使用时自动下（见下）。
+
+**怎么装**：
+
+1. 双击 `LionBox-Setup-1.5.4.exe`；
+2. 如果 Windows 弹出蓝色的"已保护你的电脑"（SmartScreen）：点 **更多信息 → 仍要运行**
+   —— 安装包没有买代码签名，这一步是正常的，不是有毒；
+3. 一路下一步（**不需要管理员权限**，装到当前用户目录）；
+4. 安装快结束时它会**自动把 VS Code 插件也装上**（自己找 `code` 命令；
+   找不到就跳过，不影响本体使用）。
+
+**装完怎么开始用**：
+
+| 你想在哪用 | 怎么做 |
+| --- | --- |
+| **在 VS Code 里**（推荐） | 打开 VS Code → 打开你的项目文件夹 → **最右边那一栏**就是「LionBox Agent」，直接在里面说话就行（第一次可能要把 VS Code 重开一下让插件生效） |
+| 在浏览器里 | 开始菜单启动 LionBox（或桌面快捷方式），然后开 `http://127.0.0.1:8080` |
+
+**第一次会先下模型**：如果安装目录里还没有权重，助手会自动从 ModelScope 下载
+`lion-merged-Q8_0.gguf`（**8.87 GB，只下一次**，界面上能看到进度）。
+网慢就先干别的，下完再聊；想离线部署就把 `.gguf` 手动放进安装目录，程序优先用本地文件。
+
+**卸载**：Windows 设置 → 应用 → LionBox 卸载（或开始菜单里的卸载项）。
+VS Code 插件会一起卸掉；你的会话和工作区数据保留。
+
+---
+
+## 📁 这个仓库里东西都在哪
+
+| 想看/想要的 | 去这个文件夹 |
+| --- | --- |
+| **安装包**（用户只要这个） | **`installer/release/`** —— `LionBox-Setup-1.5.4.exe` |
+| 内置技能（通用 skill 格式，可以自己加） | `skills/` —— 每个子目录一个技能（有 `SKILL.md`） |
+| VS Code 插件源码 | `extensions/vscode/`（`README.md` 讲它怎么工作） |
+| 后端源码 | `src/main/java/com/lioncode/` |
+| 前端（单文件，无构建步骤） | `web/index.html` |
+| 安装脚本 | `installer/LionBox.iss`、`installer/install-vscode-ext.bat` |
+| 回归用例（39 个套件） | `tools/checks/`（`python tools/checks/_run_all_checks.py` 一把跑） |
+| 出包脚本 | `tools/release/` |
+| 文档 | `docs/`（安装包清单、插件系统、上下文与改动审核、界面说明……） |
+
+模型权重**不在这个仓库**（太大），在 ModelScope：
+**[lionnezha/lion-models](https://modelscope.cn/models/lionnezha/lion-models)**。
 
 ## 装什么（就一个包）
 
-`LionBox-Setup-1.5.4.exe`（74 MB）= 后端 + WebUI + llama.cpp 运行时（Vulkan）+ 精简 JRE +
+**`installer/release/LionBox-Setup-1.5.4.exe`**（74 MB）= 后端 + WebUI + llama.cpp 运行时（Vulkan）+ 精简 JRE +
 内置技能 + **VS Code 插件**。装完：
 
 - **VS Code 右侧栏**（secondary sidebar）多出 **LionBox Agent** 面板 —— 不用跳出去，
@@ -78,6 +124,12 @@
   （`tools/release/_verify_154_single.py`，其中包含"VS Code 里到底有没有装上插件"这一条）；
 - 插件系统的行为用例是"真跑"：派子智能体、团队分头干活、审查 DENY/ALLOW、自动化到点投递、
   一轮最多几个工具、改动通过/打回 —— 不是看代码里有没有函数名。
+
+## 先说清楚这个项目不吹什么
+
+旧的 README 里写着"超越某某"、"HumanEval 70% vs 50%"这类话。**那些删了** ——
+没法验证的对比没有信息量。下面每一条都能在仓库里找到对应的代码或用例；
+**做不到的事写在最后的「已知限制」里**，而不是藏起来。
 
 ## 已知限制
 
