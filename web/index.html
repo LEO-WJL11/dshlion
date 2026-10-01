@@ -1407,6 +1407,7 @@ var App = {
         var html = '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'
             + '<button class="btn btn-sm" id="setTabAppearance" onclick="App.settingsTab(\'appearance\')">界面</button>'
             + '<button class="btn btn-sm" id="setTabPlugins" onclick="App.settingsTab(\'plugins\')">插件</button>'
+            + '<button class="btn btn-sm" id="setTabPluginParams" onclick="App.settingsTab(\'pluginparams\')">插件参数</button>'
             + '<button class="btn btn-sm" id="setTabSkills" onclick="App.settingsTab(\'skills\')">技能</button>'
             + '<button class="btn btn-sm" id="setTabProviders" onclick="App.settingsTab(\'providers\')">模型来源（本地 / API）</button>'
             + '<button class="btn btn-sm" id="setTabApprovals" onclick="App.settingsTab(\'approvals\')">审批策略</button>'
@@ -1420,7 +1421,8 @@ var App = {
     // 设置页签切换
     settingsTab: function(tab) {
         var self = this;
-        var titles = {'appearance':'setTabAppearance', 'plugins':'setTabPlugins', 'skills':'setTabSkills',
+        var titles = {'appearance':'setTabAppearance', 'plugins':'setTabPlugins',
+                      'pluginparams':'setTabPluginParams', 'skills':'setTabSkills',
                       'providers':'setTabProviders', 'approvals':'setTabApprovals',
                       'notification':'setTabNotification', 'llama':'setTabLlama'};
         Object.keys(titles).forEach(function(t) {
@@ -1439,6 +1441,7 @@ var App = {
         this.currentSettingsTab = tab;
         if (tab === 'appearance') self.renderAppearanceTab();
         else if (tab === 'plugins') self.renderPluginsTab();
+        else if (tab === 'pluginparams') self.renderPluginParamsTab();
         else if (tab === 'skills') self.renderSkillsTab();
         else if (tab === 'providers') self.renderProvidersTab();
         else if (tab === 'approvals') self.renderApprovalsTab();
@@ -2909,7 +2912,11 @@ var App = {
         order.forEach(function(k) {
             var items = groups[k];
             if (!items || !items.length) { return; }
-            html += '<div class="set-group-title">' + self.escapeHtml(self.kindLabel(k, kinds)) + '（' + items.length + '）</div>';
+            html += '<div class="set-group-title" style="display:flex;align-items:center;gap:8px">'
+                 +  '<span class="grow">' + self.escapeHtml(self.kindLabel(k, kinds)) + '（' + items.length + '）</span>'
+                 +  '<button class="btn btn-sm" onclick="App.togglePluginKind(\'' + k + '\', true)">全开</button>'
+                 +  '<button class="btn btn-sm" onclick="App.togglePluginKind(\'' + k + '\', false)">全关</button>'
+                 +  '</div>';
             items.forEach(function(p) { html += self.pluginRow(p); });
         });
         if (!plugins.length) {
@@ -3049,6 +3056,268 @@ var App = {
     },
 
     // ====== 设置：技能 ======
+    // ====== 插件参数页签 ======
+    /**
+     * 「插件参数」页签：九类插件里那些"参数得用户自己定"的，全在这里改。
+     *
+     * 【为什么必须补这一页】这些参数原本只有后端接口，界面上一个入口都没有 ——
+     * 用户根本没法把"每条命令最多跑多久""最多输出多少""子智能体递归几层""一轮派几个工具"
+     * 设成自己要的值，那这些插件就等于只有出厂默认值。要求写的是"用户自定义"，
+     * 没有界面就不算做到。
+     */
+    renderPluginParamsTab: function() {
+        var self = this;
+        var box = document.getElementById('settingsContent');
+        if (!box) return;
+        box.innerHTML = '<p class="set-note">正在读取插件参数…</p>';
+        Promise.all([
+            fetch('/api/plugins/settings').then(function(r) { return r.json(); }),
+            fetch('/api/plugins/team').then(function(r) { return r.json(); }).catch(function() { return {}; }),
+            fetch('/api/plugins/automation').then(function(r) { return r.json(); }).catch(function() { return {}; })
+        ]).then(function(res) {
+            var s = res[0];
+            if (!self.respOk(s)) { box.innerHTML = self.notReady('插件参数', 'GET /api/plugins/settings', s); return; }
+            var d = s.data || s;
+            self.pluginParams = {
+                terminal: d.terminal || {},
+                loop: d.loop || {},
+                subagent: d.subagent || {},
+                review: d.review || {},
+                team: self.respList(res[1], 'team') || [],
+                automation: (function() {
+                    var a = res[2] && (res[2].data || res[2]);
+                    return (a && a.tasks) || [];
+                })()
+            };
+            box.innerHTML = self.pluginParamsHtml();
+        }).catch(function() {
+            box.innerHTML = self.notReady('插件参数', 'GET /api/plugins/settings');
+        });
+    },
+
+    pluginParamsHtml: function() {
+        var self = this;
+        var p = this.pluginParams || {};
+        var t = p.terminal || {}, l = p.loop || {}, sb = p.subagent || {}, rv = p.review || {};
+        var h = '';
+        h += '<div class="set-note" style="margin-bottom:10px">这些参数属于对应插件；插件被关掉后它们不再生效（'
+           + '开关在「插件」页签里）。每块右下角是保存。</div>';
+
+        // ---- 终端插件 ----
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">终端插件</div></div>'
+           + '<div class="set-note">限制 execute_command / run_background 的每条命令：跑多久算卡住、最多回多少内容。</div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">每条命令最长运行（秒）</span>'
+           + '<span class="set-desc">超过就强杀并重启常驻终端；默认 ' + (t.defaultMaxCommandSeconds || 300) + '</span></span>'
+           + '<input class="set-input" id="ppTermSecs" style="width:110px" type="number" min="1" value="'
+           + (t.maxCommandSeconds || 300) + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">最多返回多少字节</span>'
+           + '<span class="set-desc">超出部分截断并注明"已截断"；默认 ' + (t.defaultMaxOutputBytes || 200000) + '</span></span>'
+           + '<input class="set-input" id="ppTermBytes" style="width:130px" type="number" min="200" value="'
+           + (t.maxOutputBytes || 200000) + '"></div>'
+           + '<div style="text-align:right;margin-top:6px"><button class="btn btn-sm" onclick="App.savePluginSection(\'terminal\')">保存终端设置</button></div>'
+           + '<div class="set-msg" id="ppMsgTerminal"></div></div>';
+
+        // ---- Agent 大循环插件 ----
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">Agent 大循环插件</div></div>'
+           + '<div class="set-note">控制 Agent 怎么派发工具调用：最多几轮、单个工具等多久、一轮派几个。</div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">一条消息最多几轮工具调用</span>'
+           + '<span class="set-desc">到上限会停下并说明原因；0 = 不限（默认 ' + (l.defaultMaxIterations || 200) + '）</span></span>'
+           + '<input class="set-input" id="ppLoopIters" style="width:110px" type="number" min="0" value="'
+           + (l.maxIterations || 0) + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">单个工具最多等（秒）</span>'
+           + '<span class="set-desc">超过当成卡住，放弃等待并把这句错误回给模型；默认 ' + (l.defaultToolTimeoutSeconds || 600) + '</span></span>'
+           + '<input class="set-input" id="ppLoopTimeout" style="width:110px" type="number" min="1" value="'
+           + (l.toolTimeoutSeconds || 600) + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">一轮最多执行几个工具调用</span>'
+           + '<span class="set-desc">0 = 不限（推荐：本机模型慢，一轮多个更快）；设了正数会把多出来的推到下一轮，并明确告诉模型</span></span>'
+           + '<input class="set-input" id="ppLoopTools" style="width:110px" type="number" min="0" value="'
+           + (l.maxToolsPerRound || 0) + '"></div>'
+           + '<div style="text-align:right;margin-top:6px"><button class="btn btn-sm" onclick="App.savePluginSection(\'loop\')">保存大循环设置</button></div>'
+           + '<div class="set-msg" id="ppMsgLoop"></div></div>';
+
+        // ---- 子智能体插件 ----
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">子智能体插件</div></div>'
+           + '<div class="set-note">模型可以调 agent_spawn 把一整件事派给独立上下文的子智能体；这里定它的边界。</div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">递归层级上限</span>'
+           + '<span class="set-desc">主 Agent = 0 层；1 = 只允许派一层，子智能体不能再往下派</span></span>'
+           + '<input class="set-input" id="ppSubDepth" style="width:110px" type="number" min="0" value="'
+           + (sb.maxDepth === undefined ? 1 : sb.maxDepth) + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">同时最多几个子智能体</span>'
+           + '<span class="set-desc">超了会回一句"并发已达上限"给模型，让它自己决定怎么办</span></span>'
+           + '<input class="set-input" id="ppSubConc" style="width:110px" type="number" min="0" value="'
+           + (sb.maxConcurrency === undefined ? 3 : sb.maxConcurrency) + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">子智能体用哪个模型</span>'
+           + '<span class="set-desc">留空 = 跟主 Agent 一样</span></span>'
+           + '<input class="set-input" id="ppSubModel" style="width:220px" placeholder="留空 = 跟主 Agent" value="'
+           + self.escapeHtml(sb.model || '') + '"></div>'
+           + '<div style="text-align:right;margin-top:6px"><button class="btn btn-sm" onclick="App.savePluginSection(\'subagent\')">保存子智能体设置</button></div>'
+           + '<div class="set-msg" id="ppMsgSubagent"></div></div>';
+
+        // ---- 自动授权审查插件 ----
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">自动授权审查插件</div></div>'
+           + '<div class="set-note">执行危险工具前，先让另一个模型看一眼要不要放行（开关在「插件」页签）。'
+           + '它默认是关的：本地模型每审一次要多花几十秒。</div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">审查用哪个模型</span>'
+           + '<span class="set-desc">留空 = 跟主 Agent 用同一个</span></span>'
+           + '<input class="set-input" id="ppRevModel" style="width:220px" placeholder="留空 = 跟主 Agent" value="'
+           + self.escapeHtml(rv.model || '') + '"></div>'
+           + '<div class="set-row"><span class="grow"><span class="set-name">审查用哪个提供商</span>'
+           + '<span class="set-desc">如 anthropic / openai-compatible；留空 = 用当前生效的那个</span></span>'
+           + '<input class="set-input" id="ppRevProvider" style="width:220px" placeholder="留空 = 当前提供商" value="'
+           + self.escapeHtml(rv.provider || '') + '"></div>'
+           + '<div class="set-row" style="align-items:flex-start"><span class="grow"><span class="set-name">审查哪些工具</span>'
+           + '<span class="set-desc">逗号分隔的工具名；留空 = 用内置那批危险的（execute_command / delete_file / git_reset …）</span>'
+           + '<input class="set-input" id="ppRevTools" style="margin-top:6px" value="'
+           + self.escapeHtml((rv.tools || []).join(', ')) + '"></span></div>'
+           + '<div style="text-align:right;margin-top:6px"><button class="btn btn-sm" onclick="App.savePluginSection(\'review\')">保存审查设置</button></div>'
+           + '<div class="set-msg" id="ppMsgReview"></div></div>';
+
+        // ---- 智能体团队 ----
+        var members = (p.team || []);
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">智能体团队（' + members.length + ' 人）</div></div>'
+           + '<div class="set-note">模型可以调 agent_team_run 把任务交给团队；每个成员用什么模式、负责什么，在这里定。</div>';
+        if (!members.length) {
+            h += '<div class="set-note">还没有成员。加一个：名字 + 模式 + 一句「负责干什么」。</div>';
+        }
+        members.forEach(function(m) {
+            h += '<div class="set-row"><span class="grow"><span class="set-name">' + self.escapeHtml(m.name || m.id) + '</span>'
+               + '<span class="set-desc">' + self.escapeHtml(String(m.mode || '').toUpperCase()) + ' · '
+               + self.escapeHtml(m.role || '（没写职责）') + '</span></span>'
+               + '<button class="btn btn-sm" onclick="App.removeTeamMember(\'' + self.escapeHtml(m.id) + '\')">移除</button></div>';
+        });
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+           + '<input class="set-input" id="ppTmName" style="flex:1;min-width:130px" placeholder="名字，如 审查员">'
+           + '<select class="set-input" id="ppTmMode" style="width:130px">'
+           +   '<option value="standard">标准模式</option><option value="minimal">极简模式</option></select>'
+           + '<input class="set-input" id="ppTmRole" style="flex:2;min-width:180px" placeholder="负责干什么，如 看代码风险">'
+           + '<button class="btn btn-sm" onclick="App.addTeamMember()">加入团队</button></div>'
+           + '<div class="set-msg" id="ppMsgTeam"></div></div>';
+
+        // ---- 自动化任务 ----
+        var tasks = (p.automation || []);
+        h += '<div class="set-block"><div class="set-block-head"><div class="set-block-title">自动化任务（' + tasks.length + ' 个）</div></div>'
+           + '<div class="set-note">到点就往指定会话里投一条消息（走的就是你手打那条链路，过程看得见、也能停）。</div>';
+        if (!tasks.length) {
+            h += '<div class="set-note">还没有任务。</div>';
+        }
+        tasks.forEach(function(tk) {
+            h += '<div class="set-row"><span class="grow"><span class="set-name">' + self.escapeHtml(tk.name || tk.id) + '</span>'
+               + '<span class="set-desc">' + (tk.everySeconds > 0 ? ('每 ' + tk.everySeconds + ' 秒') : ('定时 ' + self.escapeHtml(tk.at || '')))
+               + ' · ' + self.escapeHtml(String(tk.prompt || '').slice(0, 40)) + '</span></span>'
+               + '<button class="btn btn-sm" onclick="App.removeAutomation(\'' + self.escapeHtml(tk.id) + '\')">删除</button></div>';
+        });
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+           + '<input class="set-input" id="ppAutoName" style="width:150px" placeholder="任务名">'
+           + '<input class="set-input" id="ppAutoEvery" style="width:130px" type="number" min="5" placeholder="每多少秒">'
+           + '<input class="set-input" id="ppAutoPrompt" style="flex:2;min-width:200px" placeholder="要它做什么，如 检查今天工作区的改动">'
+           + '<button class="btn btn-sm" onclick="App.addAutomation()">加到当前会话</button></div>'
+           + '<div class="set-msg" id="ppMsgAutomation"></div></div>';
+
+        return h;
+    },
+
+    /** 整组开关：一类插件一次全开/全关（基础工具 22 个一个个点太烦） */
+    togglePluginKind: function(kind, enabled) {
+        var self = this;
+        var verb = enabled ? 'enable' : 'disable';
+        fetch('/api/plugins/kind/' + encodeURIComponent(kind) + '/' + verb, {method: 'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (!self.respOk(res)) {
+                    var el = document.getElementById('pluginTabMsg');
+                    if (el) { el.textContent = '整组开关失败：' + (res.message || ''); }
+                    return;
+                }
+                self.renderPluginsTab();
+            })
+            .catch(function() { self.renderPluginsTab(); });
+    },
+
+    /** 保存某一类插件参数（terminal / loop / subagent / review） */
+    savePluginSection: function(kind) {
+        var self = this;
+        var map = {terminal: 'ppMsgTerminal', loop: 'ppMsgLoop', subagent: 'ppMsgSubagent', review: 'ppMsgReview'};
+        var url = {terminal: '/api/plugins/settings/terminal', loop: '/api/plugins/settings/loop',
+                   subagent: '/api/plugins/settings/subagent', review: '/api/plugins/settings/review'}[kind];
+        var num = function(id, dflt) { var v = parseInt((document.getElementById(id) || {}).value, 10); return isNaN(v) ? dflt : v; };
+        var str = function(id) { return ((document.getElementById(id) || {}).value || '').trim(); };
+        var body = {};
+        if (kind === 'terminal') {
+            body = {maxCommandSeconds: num('ppTermSecs', 300), maxOutputBytes: num('ppTermBytes', 200000)};
+        } else if (kind === 'loop') {
+            body = {maxIterations: num('ppLoopIters', 0), toolTimeoutSeconds: num('ppLoopTimeout', 600),
+                    maxToolsPerRound: num('ppLoopTools', 0)};
+        } else if (kind === 'subagent') {
+            body = {maxDepth: num('ppSubDepth', 1), maxConcurrency: num('ppSubConc', 3), model: str('ppSubModel')};
+        } else {
+            var tools = str('ppRevTools').split(/[,，\s]+/).filter(function(x) { return !!x; });
+            body = {model: str('ppRevModel'), provider: str('ppRevProvider'), tools: tools};
+        }
+        fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                var el = document.getElementById(map[kind]);
+                if (el) { el.textContent = self.respOk(res) ? '已保存。' : ('保存失败：' + (res.message || '后端没接受')); }
+            })
+            .catch(function(e) {
+                var el = document.getElementById(map[kind]);
+                if (el) { el.textContent = '保存失败：' + e; }
+            });
+    },
+
+    /** 往团队里加一个成员 */
+    addTeamMember: function() {
+        var self = this;
+        var name = ((document.getElementById('ppTmName') || {}).value || '').trim();
+        var mode = ((document.getElementById('ppTmMode') || {}).value || 'standard').trim();
+        var role = ((document.getElementById('ppTmRole') || {}).value || '').trim();
+        var el = document.getElementById('ppMsgTeam');
+        if (!name) { if (el) { el.textContent = '先给成员起个名字。'; } return; }
+        fetch('/api/plugins/team', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name, mode: mode, role: role, enabled: true})})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (!self.respOk(res)) { if (el) { el.textContent = '加入失败：' + (res.message || ''); } return; }
+                self.renderPluginParamsTab();
+            })
+            .catch(function(e) { if (el) { el.textContent = '加入失败：' + e; } });
+    },
+
+    removeTeamMember: function(id) {
+        var self = this;
+        fetch('/api/plugins/team/' + encodeURIComponent(id), {method: 'DELETE'})
+            .then(function() { self.renderPluginParamsTab(); })
+            .catch(function() {});
+    },
+
+    /** 加一个自动化任务（绑当前会话） */
+    addAutomation: function() {
+        var self = this;
+        var name = ((document.getElementById('ppAutoName') || {}).value || '').trim();
+        var every = parseInt((document.getElementById('ppAutoEvery') || {}).value, 10);
+        var prompt = ((document.getElementById('ppAutoPrompt') || {}).value || '').trim();
+        var el = document.getElementById('ppMsgAutomation');
+        if (!self.sessionId) { if (el) { el.textContent = '先打开一个会话（任务要绑到会话上）。'; } return; }
+        if (!prompt) { if (el) { el.textContent = '写一下要它做什么。'; } return; }
+        if (isNaN(every) || every < 5) { if (el) { el.textContent = '周期至少 5 秒。'; } return; }
+        fetch('/api/plugins/automation', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name || prompt.slice(0, 12), sessionId: self.sessionId,
+                                  prompt: prompt, everySeconds: every, enabled: true})})
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (!self.respOk(res)) { if (el) { el.textContent = '创建失败：' + (res.message || ''); } return; }
+                self.renderPluginParamsTab();
+            })
+            .catch(function(e) { if (el) { el.textContent = '创建失败：' + e; } });
+    },
+
+    removeAutomation: function(id) {
+        var self = this;
+        fetch('/api/plugins/automation/' + encodeURIComponent(id), {method: 'DELETE'})
+            .then(function() { self.renderPluginParamsTab(); })
+            .catch(function() {});
+    },
+
     renderSkillsTab: function() {
         var self = this;
         var box = document.getElementById('settingsContent');

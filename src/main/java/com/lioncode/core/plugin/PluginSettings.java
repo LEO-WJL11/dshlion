@@ -75,6 +75,12 @@ public class PluginSettings {
     public static final int DEFAULT_TOOL_TIMEOUT_SECONDS = 600;
     /** 大循环：连续几轮"模型什么都没吐"就按正常收尾（与 AgentLoop 的 MAX_CALL_REPAIR 一致） */
     public static final int DEFAULT_SILENT_ROUNDS = 2;
+    /**
+     * 大循环：一轮最多执行几个工具调用。
+     * 0 = 不限，出厂就是这个值 —— 用户明确要求过"模型给几个就执行几个"
+     * （本机 11 token/s，砍成一轮一个等于把 50 个工具拖成 7 分钟）。
+     */
+    public static final int DEFAULT_MAX_TOOLS_PER_ROUND = 0;
     /** 子智能体：默认只允许往下派 1 层（主 Agent → 子智能体），子智能体不能再派 */
     public static final int DEFAULT_SUBAGENT_MAX_DEPTH = 1;
     /** 子智能体：默认同时最多 3 个 */

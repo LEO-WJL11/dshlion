@@ -171,6 +171,39 @@ public class PluginController {
     }
 
     /**
+     * 整组开关：把某一类插件一次全开 / 全关。
+     *
+     * <p>【为什么要这个】"基础工具插件（极简模式的）""进阶工具插件（标准模式的）"
+     * 用户是按**一类**来理解的：想"只留极简能用的那批"时，不该让他一个个点 22 个开关。
+     * 单插件开关仍然保留（细粒度还是要的），这个是组级快捷方式。</p>
+     */
+    @PostMapping("/kind/{kind}/enable")
+    public Map<String, Object> enableKind(@PathVariable("kind") String kind) {
+        return toggleKind(kind, true);
+    }
+
+    @PostMapping("/kind/{kind}/disable")
+    public Map<String, Object> disableKind(@PathVariable("kind") String kind) {
+        return toggleKind(kind, false);
+    }
+
+    private Map<String, Object> toggleKind(String kind, boolean enabled) {
+        PluginKind target;
+        try {
+            target = PluginKind.valueOf(kind.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (Exception e) {
+            return Map.of("ok", false, "kind", kind, "message", "没有这一类插件: " + kind);
+        }
+        List<String> changed = new ArrayList<>();
+        for (Plugin p : pluginRegistry.getByKind(target)) {
+            pluginSettings.setEnabled(p.getId(), enabled, p.isEnabledByDefault());
+            changed.add(p.getId());
+        }
+        return Map.of("ok", true, "kind", target.name(), "enabled", enabled,
+            "count", changed.size(), "ids", changed);
+    }
+
+    /**
      * 重新扫描插件目录：先卸掉所有外置插件（连 ClassLoader 一起），再从头扫一遍。
      */
     @PostMapping("/reload")
@@ -232,6 +265,9 @@ public class PluginController {
         }
         if (body != null && body.get("silentRounds") != null) {
             patch.put("silentRounds", intOf(body.get("silentRounds")));
+        }
+        if (body != null && body.get("maxToolsPerRound") != null) {
+            patch.put("maxToolsPerRound", intOf(body.get("maxToolsPerRound")));
         }
         pluginSettings.updateSection("loop", patch);
         return ApiResponse.ok("大循环参数已更新", loopSection());

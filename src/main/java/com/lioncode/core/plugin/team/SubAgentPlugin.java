@@ -8,14 +8,16 @@ import org.springframework.stereotype.Component;
 /**
  * 子智能体插件：把子任务派给"另一个自己"去干，并给这件事套上三条缰绳。
  *
- * <p>本轮交付的是**能用的最小实现**：配置项、注册、开关，以及
- * <b>递归层级的强制校验</b>。真正的嵌套调用要等 Lead 在 AgentLoop 里接上派发工具
- * （见 {@link #checkSpawn} 的注释），所以这里先把判定逻辑做成一个干净的、可以被任何地方调用的方法。</p>
+ * <p>职责划分：本类只管"能不能派、派几个、用哪个模型"（{@link #checkSpawn}、
+ * {@link #checkConcurrency}、{@link #config}）；**真正派活的是
+ * {@link SubAgentTool}（工具名 agent_spawn）** —— 它由 {@link TeamToolRegistrar} 注册进
+ * 插件注册表，模型一轮里调它，它就在一条同步链路上起一个独立会话跑子 Agent，
+ * 跑完把结论当工具结果带回主 Agent。端到端回归见
+ * {@code tools/checks/_check_plugin_extras.py} 的第 1–3 项。</p>
  *
  * <p>为什么不在这里直接起线程去跑子智能体：AgentLoop 是按会话串行推进的，
  * 插件自己起线程会让"这个会话现在有几件事在跑"变得没人说得清（谁的上下文、谁的审批、
- * 谁的工作区？）。所以插件只负责"能不能派、派几个、用哪个模型"，
- * 派发动作留给主循环统一做。</p>
+ * 谁的工作区？）。所以派发走的是主循环自己的工具调用链路，串行、可停、可审计。</p>
  */
 @Component
 public class SubAgentPlugin implements Plugin {

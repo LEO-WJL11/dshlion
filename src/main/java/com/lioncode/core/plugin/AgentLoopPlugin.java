@@ -120,6 +120,18 @@ public class AgentLoopPlugin implements Plugin, AgentSpi {
     }
 
     /**
+     * 一轮最多执行几个工具调用（"控制 Agent 派发工具调用的方式"里最直接的一项）。
+     *
+     * <p>0 = 不限，也是出厂值 —— 用户明确要求过"模型给几个就执行几个"
+     * （本机 11 token/s，砍成一轮一个等于把 50 个工具拖成 7 分钟）。设了正数才截断。</p>
+     */
+    public int maxToolsPerRound() {
+        int v = settings.intOf("loop", "maxToolsPerRound",
+            PluginSettings.DEFAULT_MAX_TOOLS_PER_ROUND);
+        return Math.max(v, 0);
+    }
+
+    /**
      * 把设置交给 AgentLoop。
      *
      * <p>插件被关掉时返回空表：AgentLoop 拿不到覆盖值，就用它自己的兜底常量
@@ -145,6 +157,9 @@ public class AgentLoopPlugin implements Plugin, AgentSpi {
         }
         if (section.containsKey("silentRounds")) {
             out.put("silentRounds", silentRounds());
+        }
+        if (section.containsKey("maxToolsPerRound")) {
+            out.put("maxToolsPerRound", maxToolsPerRound());
         }
         return out;
     }

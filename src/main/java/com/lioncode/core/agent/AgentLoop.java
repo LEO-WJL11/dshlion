@@ -341,9 +341,21 @@ public class AgentLoop {
                 }
             }
 
-            // 6.5 【用户要求】不再限制一轮几个工具调用：模型给几个就执行几个。
-            // 以前这里会把第 4 个之后的丢掉、并插一句【系统提示】——
-            // 那等于背着用户把模型干的活扔了，现在不这么干。
+            // 6.5 一轮执行几个工具：默认**不限制**（模型给几个执行几个 —— 用户明确要求过，
+            // 本机 11 token/s，砍成一轮一个等于把 50 个工具拖成 7 分钟）。
+            // 但"Agent 大循环插件"把它做成可配：用户在 设置 → 插件 → Agent 大循环 里设了
+            // 上限就按上限截断 —— 截断在第 9 步按**原始顺序**处理（超出的那条回一句
+            // "未执行、下一轮继续"），这样 tool 结果的顺序永远和模型给的调用顺序一致。
+            int declaredCount = toolCalls.size();
+            int toolsCap = com.lioncode.core.agent.spi.AgentSpi
+                .loopInt(sessionId, "maxToolsPerRound", 0);
+            if (toolsCap > 0 && declaredCount > toolsCap) {
+                log.info("模型一次返回 {} 个工具调用，按用户设置的上限 {} 执行 - 会话: {}",
+                    declaredCount, toolsCap, sessionId);
+                eventStore.recordEvent(sessionId, LionEvent.EventType.TOOL_CALL_START,
+                    Map.of("declared", declaredCount, "cap", toolsCap),
+                    "按用户设置截断本轮工具调用：" + declaredCount + " → " + toolsCap);
+            }
 
             // 7. 如果仍然没有工具调用，返回最终答案
             if (toolCalls.isEmpty()) {
@@ -387,8 +399,22 @@ public class AgentLoop {
                     response.reasoningContent()));
             }
 
+            // 8.5 超出上限的调用，在这里（assistant 消息之后）补一条"未执行"的结果。
+            // 不补的话模型看到"我发了 5 个、只回来 2 个"，要么以为干完了、要么怀疑工具坏了。
+            // 顺序按原始调用顺序走，和 tool_calls 一一对应。
+            int executed = 0;
+            int skippedByCap = 0;
+
             // 9. 执行工具调用（流式：识别到就执行；执行前检查暂停/停止）
             for (ChatMessage.ToolCall toolCall : toolCalls) {
+                if (toolsCap > 0 && executed >= toolsCap) {
+                    conversationHistory.addMessage(ConversationMessage.toolResult(
+                        sessionId, toolCall.id(), toolCall.name(),
+                        "未执行：本轮工具调用数超过用户设置的上限（设置 → 插件 → Agent 大循环 → "
+                            + "一轮最多几个工具调用）。这一步没做，请在这一轮重新给出这个调用。"));
+                    skippedByCap++;
+                    continue;
+                }
                 try {
                     agentControl.checkControl(sessionId);
                 } catch (AgentControlManager.AgentStoppedException e) {
@@ -408,7 +434,11 @@ public class AgentLoop {
                         argsFingerprint(toolCall.arguments()));   // 只登记，不拦
                     toolGuard.afterCall(sessionId, toolCall.name(),
                         executeTool(sessionId, toolCall, mode));
+                    executed++;
                 }
+            }
+            if (skippedByCap > 0) {
+                log.info("本轮有 {} 个工具调用按上限推迟到下一轮 - 会话: {}", skippedByCap, sessionId);
             }
 
 
@@ -1489,6 +1519,40 @@ public class AgentLoop {
     }
 
     /**
+     * 按"提供商名字"挑适配器（自动授权审查、以后别的插件都用得上）。
+     *
+     * <p>认法故意宽松：用户可能填 {@code anthropic} / {@code messages} / {@code claude}，
+     * 也可能填 {@code openai-compatible} / {@code openai} / {@code local}。认不出来、
+     * 或者那个适配器当前不可用，就退回当前激活的适配器 —— 审查器找不到模型时
+     * 宁可"用主模型审一次"，也不能让正常流程报错。</p>
+     */
+    private ModelAdapter pickAdapterFor(String provider) {
+        if (provider == null || provider.isBlank()) {
+            return adapterManager.getActiveAdapter();
+        }
+        String p = provider.trim().toLowerCase(java.util.Locale.ROOT);
+        ModelAdapter.AdapterType type = null;
+        if (p.contains("anthropic") || p.contains("messages") || p.contains("claude")) {
+            type = ModelAdapter.AdapterType.ANTHROPIC;
+        } else if (p.contains("openai") || p.contains("local") || p.contains("llama")
+                || p.contains("compatible")) {
+            type = ModelAdapter.AdapterType.OPENAI_COMPATIBLE;
+        }
+        if (type != null) {
+            try {
+                var opt = adapterManager.getAdapter(type);
+                if (opt.isPresent() && adapterManager.isAdapterAvailable(type)) {
+                    return opt.get();
+                }
+            } catch (Exception e) {
+                log.debug("按提供商 {} 取适配器失败，退回当前适配器: {}", provider, e.toString());
+            }
+        }
+        log.info("审查提供商 {} 没有对应的可用适配器，退回当前适配器", provider);
+        return adapterManager.getActiveAdapter();
+    }
+
+    /**
      * 单个工具的执行上限（秒）。
      *
      * <p>实测教训：`git_remote show origin` 会去连远端，git 在等凭据时**永远不关 stdout**，
@@ -1540,7 +1604,11 @@ public class AgentLoop {
                     .map(ws -> ws.path())
                     .orElse("(未绑定工作区)"));
             String model = review.model() == null || review.model().isBlank() ? null : review.model();
-            ModelAdapter adapter = adapterManager.getActiveAdapter();
+            // 【"用哪个提供商"必须真的生效】之前这里只用了 model，provider 配了等于没配 ——
+            // 用户明明填了"用另一个提供商来审"，实际还是拿主 Agent 的适配器去问，
+            // 那就不是"叫另一个模型审核"了。这里按 provider 取对应适配器，取不到再退回当前适配器
+            // （找不到就退回，绝不让审查把正常流程带崩）。
+            ModelAdapter adapter = pickAdapterFor(review.provider());
             ModelResponse reply = adapter.chatWithOptions(
                 List.of(ChatMessage.system("你是工具调用安全审核员，只回答 ALLOW 或 DENY，并给一句理由。"),
                         ChatMessage.user(prompt)),
@@ -1602,26 +1670,7 @@ public class AgentLoop {
     }
 
     /**
-     * 一轮里最多保留 MAX_TOOLS_PER_ROUND 个工具调用，多余的丢掉并告诉模型。
-     *
-     * 以前这里是硬性"一轮只准一个工具"（1.1.4 时代模型一次吐好几个调用、参数还错，
-     * 只能一个个来）。但本机解码 11-12 token/s，一轮一个工具 = 50 个工具 50 轮 ≈ 7 分钟。
-     * 现在原生通道已通（服务端按 Qwen 模板解析 &lt;function=…&gt;），一轮 3 个互不依赖的
-     * 调用完全没问题；执行仍严格按顺序、逐个回结果，所以有依赖的任务不受影响。
-     */
-    private List<ChatMessage.ToolCall> capToolsPerRound(String sessionId,
-                                                        List<ChatMessage.ToolCall> toolCalls) {
-        // 【用户要求】不再限制一轮几个：模型给多少就给多少执行。
-        // （这个方法名保留着，免得外面还有调用点；里面已经不做任何截断。）
-        if (toolCalls.size() > MAX_TOOLS_PER_ROUND) {
-            log.info("模型一次返回 {} 个工具调用，全部执行（不再截断）- 会话: {}",
-                toolCalls.size(), sessionId);
-        }
-        return toolCalls;
-    }
-
-    /**
-     * 一轮最多生成多少 token —— 本地模型必须封顶。
+     * 一轮里最多生成多少 token —— 本地模型必须封顶。
      *
      * 实测 llama-server 起来时带的是 `-n 4096`，而解码只有 11-12 token/s：
      * 模型要是话多，一轮就能写 4096 个 token ≈ **6 分 20 秒**（日志里真出现过

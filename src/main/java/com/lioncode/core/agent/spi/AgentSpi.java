@@ -67,8 +67,15 @@ public interface AgentSpi {
     /**
      * Agent 大循环参数覆盖（大循环插件用）。
      *
-     * <p>已约定的 key：{@code maxIterations}（int）、{@code toolTimeoutSeconds}（int）、
-     * {@code silentRounds}（int，连续无工具调用的容忍轮数）。未知 key 直接忽略。</p>
+     * <p>已约定的 key：
+     * <ul>
+     *   <li>{@code maxIterations}（int）—— 最多几轮工具调用，0 = 不限；</li>
+     *   <li>{@code toolTimeoutSeconds}（int）—— 单个工具最多跑多少秒；</li>
+     *   <li>{@code silentRounds}（int)—— 连续几轮没有工具调用的容忍度；</li>
+     *   <li>{@code maxToolsPerRound}（int）—— 一轮最多执行几个工具调用，0 = 不限
+     *       （＝"控制 Agent 派发工具调用的方式"里"一次派几个"这一项）。</li>
+     * </ul>
+     * 未知 key 直接忽略。</p>
      */
     default Map<String, Object> loopOptions(String sessionId) {
         return Map.of();
@@ -163,7 +170,8 @@ public interface AgentSpi {
                 Map<String, Object> m = spi.loopOptions(sessionId);
                 if (m != null && !m.isEmpty()) {
                     // 只接受约定过的 key，别的直接丢，防止插件乱塞把主循环搞坏
-                    for (String k : new String[] {"maxIterations", "toolTimeoutSeconds", "silentRounds"}) {
+                    for (String k : new String[] {"maxIterations", "toolTimeoutSeconds",
+                                                  "silentRounds", "maxToolsPerRound"}) {
                         if (m.containsKey(k)) {
                             out.put(k, m.get(k));
                         }
