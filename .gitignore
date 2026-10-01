@@ -1,3 +1,129 @@
+# Lion-Code Agent Harness .gitignore
+
+# ===== Maven =====
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== IDE =====
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+*.swp
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Java =====
+*.class
+*.jar
+*.jar.bak*
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+
+# ===== 鏃ュ織 =====
+*.log
+logs/
+
+# ===== 杩愯鏃舵暟鎹?=====
+.lioncode/
+workspace-data/
+
+# ===== 鍙傝�冩簮鐮佺洰褰曪紙淇濈暀浣嗕笉杩借釜鍏跺唴閮ㄥ彉鏇达級 =====
+# claude-code/ 鍜?deepseek-harness/ 鏄弬鑰冩簮鐮侊紝鍔犲叆.gitignore
+claude-code/
+deepseek-harness/
+
+# ===== Node.js (鍓嶇) =====
+node_modules/
+web/node_modules/
+web/dist/
+web/.cache/
+
+# ===== 鐜鍙橀噺 =====
+.env
+.env.local
+.env.*.local
+
+# ===== 妯″瀷鏉冮噸 / 澶т簩杩涘埗锛堢粷涓嶅叆搴擄級=====
+*.gguf
+*.safetensors
+*.bin
+*.rom
+*.onnx
+
+# ===== 鎵撳寘浜х墿 =====
+dist/*.gguf
+dist/*.jar
+dist/runtime-vulkan/
+installer/release/
+/release/   # 只忽略仓库根目录的 release/（原来的写法会把 tools/release/ 也一起忽略掉，新增的发布脚本进不了库）
+
+# ===== 璋冪爺璧勬枡锛堜綋绉ぇ銆侀潪婧愮爜锛?====
+_research/
+_hwres/
+
+# ===== 娴嬭瘯涓存椂浜х墿 =====
+_fc_ws/
+_fc_requests.jsonl
+_fc_broken_log.jsonl
+_box_bios/*.rom
+_LionBoxTest/
+*.eext
+
+# ===== 璋冪爺 PDF =====
+*.pdf
+usbresearch/
+dl/
+
+# ===== 涓存椂鏂囦欢 / 鎶撳彇娈嬬暀 =====
+/_*.txt
+/_*.pid
+/_*.log.err
+/_mimo_proxy.jsonl
+/fetch*.py
+/grepdl.py
+/7840u.html
+/v3000.html
+/launcher.ps1
+
+# E2E 测试期间的用户配置备份（含真实密钥，绝不入库）
+_app-config.e2e-backup.json
+
+# jlink 生成的自带运行时（构建产物）
+dist/runtime-jre/
+
+# NOTE: the shipped installer in installer/release/ is deliberately force-added (git add -f).
+# Git cannot re-include files inside an ignored directory, so -f is required.
+# Rebuild: ISCC.exe installer\LionBox.iss  (keeps the path ignored for future builds)
+
+# Python ??
+__pycache__/
+*.pyc
+
+# Electron 打包用的暂存运行时（101MB，本机从已安装的 LionBox 拷过来，不入库）
+desktop/electron/staging-backend/
+desktop/electron/dist/
 
 # dist/skills/ is a build-time copy of the repo skills/ dir (artifact, never committed)
 dist/skills/
