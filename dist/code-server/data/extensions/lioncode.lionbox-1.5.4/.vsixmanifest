@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="lionbox" Version="1.5.4" Publisher="lioncode" />
+    <DisplayName>LionBox</DisplayName>
+    <Description xml:space="preserve">LionBox 智能体：VS Code 右侧栏直接干活 —— 工作区就是当前打开的文件夹，@ 引用单文件进上下文，AI 改的每个文件由你点「通过」才真正落盘</Description>
+    <Tags>lionbox,lion-code,agent,ai,cursor</Tags>
+    <Categories>Other,Machine Learning</Categories>
+    <GalleryFlags>Public</GalleryFlags>
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^1.90.0" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="ui,workspace" />
+    </Properties>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code" />
+  </Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>

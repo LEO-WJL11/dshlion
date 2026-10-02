@@ -1,0 +1,6 @@
+# 打包进 .vsix 时排除的开发文件（vsce 会自动排除 devDependencies）
+.vscode/**
+node_modules/**
+**/*.map
+jsconfig.json
+*.vsix

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+  <!-- LionBox：开口立方体 + 探出盒口的狮子头。活动栏是单色描边，颜色交给 VS Code 主题 -->
+  <!-- 狮头 -->
+  <circle cx="12" cy="6.4" r="2.6"/>
+  <path d="M9.5 8.4 8.6 10M14.5 8.4l.9 1.6"/>
+  <path d="M9.7 5.2 8.9 3.6l1.7.5M14.3 5.2l.8-1.6-1.7.5"/>
+  <circle cx="11" cy="6.1" r="0.42" fill="currentColor" stroke="none"/>
+  <circle cx="13" cy="6.1" r="0.42" fill="currentColor" stroke="none"/>
+  <!-- 立方体：顶面菱形 + 左右两壁（等轴测，和彩色图标同一造型） -->
+  <path d="M12 11.2 3.4 14.6 12 18l8.6-3.4z"/>
+  <path d="M3.4 14.6V19l8.6 3.4V18z"/>
+  <path d="M20.6 14.6V19L12 22.4V18z"/>
+</svg>

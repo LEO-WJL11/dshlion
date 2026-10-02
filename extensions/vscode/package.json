@@ -2,7 +2,7 @@
   "name": "lionbox",
   "displayName": "LionBox",
   "description": "LionBox 智能体：VS Code 右侧栏直接干活 —— 工作区就是当前打开的文件夹，@ 引用单文件进上下文，AI 改的每个文件由你点「通过」才真正落盘",
-  "version": "1.5.4",
+  "version": "1.5.23",
   "publisher": "lioncode",
   "license": "MIT",
   "repository": {
@@ -25,7 +25,8 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onView:lionbox.agent"
+    "onView:lionbox.agent",
+    "onStartupFinished"
   ],
   "contributes": {
     "viewsContainers": {

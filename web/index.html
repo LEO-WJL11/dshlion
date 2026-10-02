@@ -103,9 +103,6 @@
         .ws-body { padding: 2px 4px 6px 4px; }
         .ws-body .session-item { padding: 6px 6px 6px 8px; }
         .ws-empty { font-size: 11px; color: var(--text-mute); padding: 4px 10px 8px; }
-        .ws-pick { margin-left: 4px; background: var(--border-soft); color: var(--text-dim); border: 1px solid var(--border);
-                   border-radius: 5px; font-size: 10.5px; padding: 1px 3px; max-width: 112px; }
-        .ws-pick:hover { color: var(--text); }
         #clearAllSessions:hover { color: var(--err); }
         #clearAllSessions:disabled { opacity: .4; cursor: default; }
         .session-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; margin-bottom: 4px; border-radius: 8px; cursor: pointer; }
@@ -267,14 +264,13 @@
     <!-- 侧边栏 -->
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="logo"><span class="logo-icon">🦁</span><span class="logo-text">LionBox</span></div>
+            <div class="logo"><img class="logo-icon" src="/lionbox.png" alt="LionBox" style="width:22px;height:22px;border-radius:6px;vertical-align:-5px"><span class="logo-text">LionBox</span></div>
             <button class="btn btn-primary btn-sm" style="width:100%" onclick="App.newSession()">＋ 新建对话</button>
         </div>
         <div class="sidebar-section">
             <div class="section-title">工作区</div>
             <div class="workspace-info">
-                <span class="workspace-path" id="wsPath">未选择工作区</span>
-                <button class="btn btn-ghost btn-sm" onclick="App.pickWorkspace()">选择</button>
+                <span class="workspace-path" id="wsPath">未打开文件夹</span>
             </div>
         </div>
         <div class="sidebar-section">
@@ -385,7 +381,7 @@
                 <button class="btn btn-primary btn-send" id="sendBtn" onclick="App.send()">➤</button>
             </div>
             <div class="input-hints">
-                <span>💡 先选择工作区，再创建会话</span>
+                <span>💡 工作区 = 左边 VS Code 打开的那个文件夹，不用选</span>
                 <!-- 上下文窗口：默认 16K（省预填充）。点一下能手动改，AI 自己也能用工具改 -->
                 <span id="ctxChip" title="上下文窗口：越大，每一轮要重算的前缀越多。AI 也能用 context_window 工具自己调"
                       style="cursor:pointer" onclick="App.promptContextWindow()">窗口 —</span>
@@ -601,63 +597,7 @@ var App = {
           .catch(function(e) { console.log('自动初始化:', e); });
     },
 
-    // ====== 工作区 ======
-    pickWorkspace: function() {
-        var self = this;
-        if (this.pickingWs) return; // 防止重复点击弹出多个窗口
-        this.pickingWs = true;
-        // 按钮置为"请稍候"，防止连点
-        var btn = document.querySelector('.workspace-info .btn');
-        var btnOriginal = btn ? btn.textContent : '选择';
-        if (btn) { btn.textContent = '请稍候…'; btn.disabled = true; }
-        var done = function() {
-            self.pickingWs = false;
-            if (btn) { btn.textContent = btnOriginal; btn.disabled = false; }
-        };
-        // 弹Windows原生标准文件夹选择窗口（现代Explorer样式）
-        var initial = this.ws || '';
-        fetch('/api/native-dialog/select-directory?initialPath=' + encodeURIComponent(initial))
-          .then(function(r) { return r.json(); })
-          .then(function(result) {
-            done();
-            if (result.success && result.data) {
-                self.selectWs(result.data);
-            } else {
-                // 取消或失败 → 页内常用路径模态框兜底（不再弹系统窗口）
-                self.openWorkspaceFallbackModal();
-            }
-          })
-          .catch(function() {
-            done();
-            self.openWorkspaceFallbackModal();
-          });
-    },
-
-    // 常用路径兜底模态框（原生对话框不可用时）
-    openWorkspaceFallbackModal: function() {
-        var self = this;
-        var render = function(commonPaths) {
-            var icons = {'桌面':'🖥️', '文档':'📄', '下载':'📥', '图片':'🖼️', '用户目录':'🏠'};
-            var html = '<p style="color:var(--text-dim);margin-bottom:16px">选择常用目录或手动输入路径：</p>';
-            html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">';
-            Object.keys(commonPaths).forEach(function(name) {
-                var p = commonPaths[name];
-                if (!p) return;
-                var esc = p.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                html += '<button onclick="App.selectWs(\'' + esc + '\')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:13px;text-align:left">';
-                html += '<span style="font-size:18px">' + (icons[name] || '📁') + '</span><span style="flex:1">' + name + '</span>';
-                html += '<span style="font-size:11px;color:var(--text-mute);font-family:monospace">' + p + '</span></button>';
-            });
-            html += '</div>';
-            html += '<div style="display:flex;gap:8px"><input id="customWsPath" style="flex:1;padding:8px 12px;background:var(--panel-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:13px" placeholder="输入自定义路径，如 D:\\my-project">';
-            html += '<button class="btn btn-primary" onclick="App.selectWs(document.getElementById(\'customWsPath\').value)">确定</button></div>';
-            self.openModal('选择工作区', html);
-        };
-        // 常用目录从后端动态获取（基于当前系统用户，不含本机硬编码信息）
-        fetch('/api/native-dialog/common-dirs').then(function(r) { return r.json(); })
-          .then(function(result) { render((result.success && result.data) ? result.data : {}); })
-          .catch(function() { render({}); });
-    },
+    // 工作区不再由用户选择：adoptWorkspace 直接用左边 VS Code 打开的那个文件夹。
 
     selectWs: function(path) {
         if (!path || !path.trim()) return;
@@ -691,14 +631,46 @@ var App = {
         }).catch(function(e) { alert('注册失败: ' + e.message); });
     },
 
+    // 工作区不再让用户选：就用左边 VS Code 打开的那个文件夹。
+    // 插件在激活时会把打开的文件夹注册成工作区，这里取最新的那个；一个都没有才退回用户目录。
+    adoptWorkspace: function(cb) {
+        var self = this;
+        if (this.ws) { cb(this.ws); return; }
+        fetch('/api/workspaces').then(function(r) { return r.json(); })
+          .then(function(res) {
+            var list = (res && res.success && res.data) ? res.data : [];
+            var pick = '';
+            if (list.length) {
+                var last = list[list.length - 1];
+                pick = last.id || last.path || '';
+            }
+            if (pick) {
+                self.ws = pick;
+                var p = (list[list.length - 1].path) || pick;
+                document.getElementById('wsPath').textContent = p;
+                document.getElementById('bcWs').textContent = p;
+            }
+            cb(pick);
+          })
+          .catch(function() { cb(''); });
+    },
+
     // ====== 会话 ======
     newSession: function() {
         var self = this;
-        if (!this.ws) { alert('请先选择工作区'); return; }
+        this.adoptWorkspace(function(ws) {
+            if (!ws) { self.createDefaultSession(); return; }
+            self.createSessionIn(ws);
+        });
+    },
+
+    createSessionIn: function(ws) {
+        var self = this;
+        this.ws = ws;
         fetch('/api/sessions', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({workspaceId: this.ws, mode: this.mode})
+            body: JSON.stringify({workspaceId: ws, mode: this.mode})
         }).then(function(r) { return r.json(); })
           .then(function(result) {
             if (result.success) {
@@ -831,21 +803,6 @@ var App = {
         this.renderSessionTabs(this.sessionsData || [], this.workspacesData || []);
     },
 
-    /** 给某个对话换工作区（选项卡会跟着变） */
-    moveSession: function(sid, wsId) {
-        var self = this;
-        fetch('/api/sessions/' + sid + '/workspace', {
-            method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({workspaceId: wsId})
-        }).then(function(r) { return r.json(); }).then(function(res) {
-            if (!res || !res.success) {
-                alert('换工作区失败：' + ((res && res.error) || '未知错误'));
-                return;
-            }
-            self.loadSessions();
-        }).catch(function(e) { alert('换工作区失败：' + e); });
-    },
-
     /** 在某个工作区里新建对话 */
     newSessionIn: function(wsId) {
         var self = this;
@@ -887,9 +844,8 @@ var App = {
             groups[k].push(s);
         });
         // 注意：这里**不再**把没有对话的工作区加进来。
-        // workspaces（/api/workspaces）仍然全部保留，只是不在对话列表里占位：
-        //   · 对话右边的「选工作区」下拉仍然列全部工作区，想把对话挪进去照样可以；
-        //   · 挪进去之后那个工作区自然就出现了。
+        // 工作区本身还都留着（只是不在对话列表里占位）；用户也不能再手动换工作区 ——
+        // 工作区就是左边 VS Code 打开的那个文件夹。
         // （用户要的就是这个：没对话就删掉显示 —— 不是删文件夹。）
         // 当前对话所在工作区排最前
         var cur = sessions.filter(function(x) { return x.sessionId === self.sessionId; })[0];
@@ -941,26 +897,7 @@ var App = {
                          +   '<button class="del-btn" title="重命名"'
                          +           ' onclick="event.stopPropagation();App.renameSession(\'' + s.sessionId + '\')">✎</button>'
                          +   '<button class="del-btn" title="删除"'
-                         +           ' onclick="event.stopPropagation();App.deleteSession(\'' + s.sessionId + '\')">×</button>';
-                    // 每个对话都能选工作区
-                    html += '<select class="ws-pick" title="把这个对话放到别的工作区"'
-                         +        ' onclick="event.stopPropagation()"'
-                         +        ' onchange="event.stopPropagation();App.moveSession(\'' + s.sessionId + '\', this.value)">';
-                    var seen = {};
-                    var opts = order.slice();
-                    workspaces.forEach(function(w) {
-                        var k = w.path || w.workspaceId;
-                        if (k && opts.indexOf(k) < 0) opts.push(k);
-                    });
-                    if (opts.indexOf(wsId) < 0) opts.push(wsId);
-                    opts.forEach(function(k) {
-                        if (seen[k]) return;
-                        seen[k] = 1;
-                        html += '<option value="' + self.escapeAttr(k) + '"'
-                             +  (k === wsId ? ' selected' : '') + '>'
-                             +  self.escapeHtml(self.wsLabel({path: k})) + '</option>';
-                    });
-                    html += '</select></div>';
+                         +           ' onclick="event.stopPropagation();App.deleteSession(\'' + s.sessionId + '\')">×</button></div>';
                 });
                 html += '</div>';
             }

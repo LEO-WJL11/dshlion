@@ -1,0 +1,9 @@
+{
+  "chat.disableAIFeatures": true,
+  "chat.commandCenter.enabled": false,
+  "chat.editor.enabled": false,
+  "workbench.secondarySideBar.defaultVisibility": "visible",
+  "workbench.startupEditor": "none",
+  "telemetry.telemetryLevel": "off",
+  "locale": "zh-cn"
+}

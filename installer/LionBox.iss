@@ -1,4 +1,4 @@
-; ============================================================
+﻿; ============================================================
 ;  LionBox 安装包脚本  (Inno Setup 6)
 ;
 ;  编译： ISCC.exe LionBox.iss
@@ -119,11 +119,12 @@
 ;         ⑤ 新增功能回归套件 _check_plugin_extras.py（20 条断言）：派子智能体、层级/并发上限、
 ;            团队分头干活、审查 DENY/ALLOW、自动化到点投递、轮次上限、终端限制、整组开关，全过；
 ;         ⑥ 37 个回归套件全绿。要求逐条对照见 docs/插件要求对照.md
-#define AppVersion     "1.5.4"
+#define AppVersion     "1.5.23"
 #define AppPublisher   "LionBox"
 #define AppExeName     "启动LionBox.bat"
 
 [Setup]
+SetupIconFile=..\assets\icon\lionbox.ico
 AppId={{8E3F1C42-5B7A-4D91-9E26-7C4A1D8B6F30}
 AppName={#AppNameCN}
 AppVersion={#AppVersion}
@@ -200,15 +201,35 @@ Source: "..\dist\runtime-jre\*";     DestDir: "{app}\runtime-jre";     Flags: ig
 ; 用户要的是"就一个包"：装完 LionBox，VS Code 右侧栏的 Agent 面板也就装好了。
 ; 插件包同时留在 {app}\vscode-extension\ 里，没自动装上（比如没装 VS Code）也能手动装。
 Source: "release\LionBox-VSCode-{#AppVersion}.vsix"; DestDir: "{app}\vscode-extension"; DestName: "LionBox-VSCode.vsix"; Flags: ignoreversion
+; 自带一份原版 VS Code（便携模式）：装完左边是 VS Code、右边是我们的 Agent 面板，
+; 干净电脑上不需要预装任何东西。体积大，压缩留到最后统一做。
+; 简体中文语言包（zh-HANS，不是繁体）：装进自带 VS Code，界面直接是中文
+Source: "..\dist\vscode-ext\*"; DestDir: "{app}\vscode-ext"; Flags: ignoreversion
+; 左边是 VS Code 的 Web 版（code-server）+ 自带 Node 运行时：干净电脑免预装，
+; 启动器用它们拼出"左编辑器 + 右 Agent"的工作室页面。
+Source: "..\dist\code-server\*"; DestDir: "{app}\code-server"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\node\*"; DestDir: "{app}\node"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "install-vscode-ext.bat"; DestDir: "{app}"; Flags: ignoreversion
 
+[Files]
+; 应用图标：开始菜单/桌面快捷方式和卸载项都用它
+Source: "..\assets\icon\lionbox.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[Tasks]
+; 勾上就不自动下载本地模型（8.9 GB），改用云端 API，或以后自己把 .gguf 放进安装目录
+Name: "nomodel"; Description: "不下载本地模型（省约 8.9 GB；改用云端 API，或以后自己放权重）"; GroupDescription: "附加选项:"; Flags: unchecked
+
+[INI]
+; 勾了 nomodel 才写这个文件；launcher.ps1 读它决定要不要给后端加 auto-download=false
+Filename: "{app}\lionbox-options.ini"; Section: "runtime"; Key: "autoDownload"; String: "0"; Tasks: nomodel
+
 [Icons]
-Name: "{group}\{#AppNameCN}";           Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{group}\停止 LionBox";            Filename: "{app}\停止LionBox.bat"; WorkingDir: "{app}"
-Name: "{group}\为 VS Code 安装插件";      Filename: "{app}\install-vscode-ext.bat"; WorkingDir: "{app}"
-Name: "{group}\使用说明";                Filename: "{app}\使用说明.md"; WorkingDir: "{app}"
-Name: "{group}\卸载 {#AppNameCN}";       Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppNameCN}";      Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#AppNameCN}";           Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\lionbox.ico"
+Name: "{group}\停止 LionBox";            Filename: "{app}\停止LionBox.bat"; WorkingDir: "{app}"; IconFilename: "{app}\lionbox.ico"
+Name: "{group}\为 VS Code 安装插件";      Filename: "{app}\install-vscode-ext.bat"; WorkingDir: "{app}"; IconFilename: "{app}\lionbox.ico"
+Name: "{group}\使用说明";                Filename: "{app}\使用说明.md"; WorkingDir: "{app}"; IconFilename: "{app}\lionbox.ico"
+Name: "{group}\卸载 {#AppNameCN}";       Filename: "{uninstallexe}"; IconFilename: "{app}\lionbox.ico"
+Name: "{autodesktop}\{#AppNameCN}";      Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\lionbox.ico"
 
 [Run]
 ; 装完自动给 VS Code 装上 LionBox 插件（右侧栏的 Agent 面板）。

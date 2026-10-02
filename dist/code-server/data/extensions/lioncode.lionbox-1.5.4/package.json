@@ -1,0 +1,115 @@
+{
+	"name": "lionbox",
+	"displayName": "LionBox",
+	"description": "LionBox 智能体：VS Code 右侧栏直接干活 —— 工作区就是当前打开的文件夹，@ 引用单文件进上下文，AI 改的每个文件由你点「通过」才真正落盘",
+	"version": "1.5.4",
+	"publisher": "lioncode",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/LEO-WJL11/dshlion.git"
+	},
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"Other",
+		"Machine Learning"
+	],
+	"keywords": [
+		"lionbox",
+		"lion-code",
+		"agent",
+		"ai",
+		"cursor"
+	],
+	"main": "./src/extension.js",
+	"activationEvents": [
+		"onView:lionbox.agent"
+	],
+	"contributes": {
+		"viewsContainers": {
+			"secondarySidebar": [
+				{
+					"id": "lionboxAgentBar",
+					"title": "LionBox Agent",
+					"icon": "media/lionbox.svg"
+				}
+			]
+		},
+		"views": {
+			"lionboxAgentBar": [
+				{
+					"type": "webview",
+					"id": "lionbox.agent",
+					"name": "Agent",
+					"contextualTitle": "LionBox Agent"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "lionbox.openAgent",
+				"title": "打开 Agent 面板（右侧栏）",
+				"category": "LionBox"
+			},
+			{
+				"command": "lionbox.newSession",
+				"title": "新建对话",
+				"category": "LionBox"
+			},
+			{
+				"command": "lionbox.referenceFile",
+				"title": "@ 引用一个文件",
+				"category": "LionBox"
+			},
+			{
+				"command": "lionbox.openWebUI",
+				"title": "打开完整 Web UI",
+				"category": "LionBox"
+			},
+			{
+				"command": "lionbox.reload",
+				"title": "重新检测后端并刷新",
+				"category": "LionBox"
+			}
+		],
+		"configuration": {
+			"title": "LionBox",
+			"properties": {
+				"lionbox.baseUrl": {
+					"type": "string",
+					"default": "http://127.0.0.1:8080",
+					"description": "LionBox 后端地址（Web UI 根地址）。改端口只改这里。"
+				},
+				"lionbox.healthPath": {
+					"type": "string",
+					"default": "/api/runtime/mode",
+					"description": "后端就绪检测路径。收到任何 HTTP 响应即视为已就绪。"
+				},
+				"lionbox.probeTimeoutMs": {
+					"type": "number",
+					"default": 1500,
+					"description": "单次探测超时（毫秒）。"
+				},
+				"lionbox.pollMs": {
+					"type": "number",
+					"default": 1500,
+					"description": "面板刷新间隔（毫秒）：轮询待审改动与对话历史。"
+				}
+			}
+		}
+	},
+	"scripts": {
+		"package": "vsce package",
+		"publish:marketplace": "vsce publish"
+	},
+	"devDependencies": {
+		"@types/vscode": "1.90.0"
+	},
+	"__metadata": {
+		"installedTimestamp": 1790863859974,
+		"targetPlatform": "undefined",
+		"size": 34946
+	}
+}

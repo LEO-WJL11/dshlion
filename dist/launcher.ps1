@@ -150,7 +150,16 @@ if (Test-Http -Port $AgentPort) {
     Write-Line "  [4/4] Agent ................... 已在运行"
 }
 else {
-    $jarPath = Join-Path $Root $JarName
+    $runtimeArgs = @()
+# 安装时勾了"不下载本地模型"就写在这个文件里（见 installer/LionBox.iss 的 [INI]）
+$optFile = Join-Path $Root 'lionbox-options.ini'
+if (Test-Path $optFile) {
+    $optTxt = Get-Content $optFile -Raw -ErrorAction SilentlyContinue
+    if ($optTxt -match 'autoDownload\s*=\s*0') {
+        $runtimeArgs += '--lionbox.runtime.auto-download=false'
+    }
+}
+$jarPath = Join-Path $Root $JarName
     if (-not (Test-Path $jarPath)) {
         Write-Line "  [错误] 找不到程序文件： $JarName"
         Read-Host '  按回车键退出'
@@ -192,5 +201,81 @@ else {
 }
 Write-Line '  ============================================'
 Write-Line ''
-Start-Process "http://127.0.0.1:$AgentPort" | Out-Null
-Start-Sleep -Seconds 4
+# ---------- 5. 起 code-server，并打开它（Agent 就在它右侧栏里） ----------
+# 不再打开"并排拼两个页面"的 studio.html：我们的插件是以 webview view 挂在 VS Code 的
+# 右侧栏（secondarySidebar）上的，激活后自动聚焦 —— 所以直接开 code-server 就是
+# "左边编辑器、右边我们的 Agent"，同一个窗口。
+$csEntry = Join-Path $PSScriptRoot 'code-server\node_modules\code-server\out\node\entry.js'
+$nodeExe = Join-Path $PSScriptRoot 'node\node.exe'
+$csPort = 8081
+# ---- 每次启动都把"中文 + 我们想要的默认设置"重写一遍（幂等）----
+# 为什么不能只靠打包时预置：第二次运行时 code-server 可能已经把 profile 重建成默认值，
+# locale 就回到英文了。这里是运行期兜底，保证每次打开都是简体中文。
+$csData = Join-Path $PSScriptRoot 'code-server\data'
+# locale 同时写到 code-server 可能读取的每个位置（不同版本读的地方不一样，全给上不亏）
+$argvJson = "{`n  `"locale`": `"zh-cn`"`n}`n"
+foreach ($d in @($csData, (Join-Path $csData 'data'), (Join-Path $csData 'user-data'),
+                 (Join-Path $csData 'User'), (Join-Path $PSScriptRoot 'code-server'))) {
+    try {
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $d 'argv.json'), $argvJson,
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $csData 'User') | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $csData 'argv.json'), "{`n  `"locale`": `"zh-cn`"`n}`n", (New-Object System.Text.UTF8Encoding($false)))
+$setDirs = @((Join-Path $csData 'User'), (Join-Path $csData 'data\User'))
+foreach ($sd in $setDirs) { try { New-Item -ItemType Directory -Force -Path $sd | Out-Null } catch { } }
+$setFile = Join-Path $csData 'User\settings.json'
+$set = @{}
+if (Test-Path $setFile) {
+    try { (Get-Content $setFile -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $set[$_.Name] = $_.Value } } catch { }
+}
+$set['locale'] = 'zh-cn'
+$set['chat.disableAIFeatures'] = $true
+$set['chat.commandCenter.enabled'] = $false
+$set['workbench.secondarySideBar.defaultVisibility'] = 'visible'
+$set['telemetry.telemetryLevel'] = 'off'
+$set['workbench.startupEditor'] = 'none'
+foreach ($sd in $setDirs) {
+    try { [System.IO.File]::WriteAllText((Join-Path $sd 'settings.json'), ($set | ConvertTo-Json),
+            (New-Object System.Text.UTF8Encoding($false))) } catch { }
+}
+# ---- 已经在跑就不再起第二个（两个实例共用同一个 data 目录会把状态互相覆盖）----
+$already = Test-Http -Port $csPort -Path '/healthz' -TimeoutSec 2
+if ($already) {
+    Write-Line "     编辑器已在运行，直接打开：http://127.0.0.1:$csPort"
+    Start-Process "http://127.0.0.1:$csPort" | Out-Null
+    # 自检证据：中文没生效时，看这个文件就知道卡在哪一环
+    try {
+        $lines = @(
+            "code-server 数据目录: $csData",
+            "argv.json: " + (Get-Content (Join-Path $csData 'argv.json') -Raw -ErrorAction SilentlyContinue),
+            "settings.json: " + (Get-Content (Join-Path $csData 'User\settings.json') -Raw -ErrorAction SilentlyContinue),
+            "已装扩展: " + ((Get-ChildItem (Join-Path $csData 'extensions') -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', ')
+        )
+        [System.IO.File]::WriteAllLines((Join-Path $PSScriptRoot 'lionbox-selfcheck.txt'), $lines,
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+elseif ((Test-Path $nodeExe) -and (Test-Path $csEntry)) {
+    # 让插件知道用户是从 LionBox 进来的，激活后自动把右侧栏的 Agent 面板展开
+    $env:LIONBOX_MIXED = '1'
+    Write-Line '     正在启动编辑器（VS Code Web 版，右侧栏是 LionBox Agent）…'
+    $csArgs = @($csEntry, '--bind-addr', "127.0.0.1:$csPort", '--auth', 'none',
+                '--locale=zh-cn', '--disable-telemetry', '--disable-update-check',
+                '--user-data-dir', (Join-Path $PSScriptRoot 'code-server\data'))
+    try { Start-Process -FilePath $nodeExe -ArgumentList $csArgs -WindowStyle Hidden } catch { }
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (Test-Http -Port $csPort -Path '/healthz' -TimeoutSec 2) { break }
+    }
+    Write-Line "     编辑器      : http://127.0.0.1:$csPort"
+    Start-Process "http://127.0.0.1:$csPort" | Out-Null
+    Write-Line '     右侧栏没自动出来就按 Ctrl+Shift+P -> LionBox: 打开 Agent 面板（右侧栏）'
+}
+else {
+    Write-Line '     没找到自带的 code-server，先用浏览器打开界面'
+    Start-Process "http://127.0.0.1:$AgentPort" | Out-Null
+}
+Start-Sleep -Seconds 3
