@@ -134,3 +134,11 @@ desktop/tauri/src-tauri/target/
 desktop/tauri/src-tauri/gen/schemas/
 
 extensions/vscode/*.vsix
+
+# 构建产物/运行时：体积大且可再生成，不进仓库（installer 打包时会用本地文件）
+dist/code-server/
+dist/node/
+dist/vscode/
+dist/vscode-ext/
+installer/release-studio/
+*.tmp
